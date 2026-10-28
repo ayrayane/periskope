@@ -9,6 +9,7 @@ spec:
   realm: {{ .Values.keycloakClient.realm }}
   client:
     displayName: Periskope
+    enabled: true
     appUrl: https://{{ .Values.host }}
     loginFlows: [STANDARD]
     redirectUris: ["https://{{ .Values.host }}/*"]
