@@ -1,0 +1,46 @@
+[project]
+name = "periskope"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["periskope-api", "periskope-scheduler", "periskope-collector"]
+
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+
+[tool.uv.sources]
+periskope-api = { workspace = true }
+periskope-scheduler = { workspace = true }
+periskope-collector = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "import-linter>=2.1", "ruff>=0.8", "respx>=0.21"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages", "services"]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.importlinter]
+root_packages = ["periskope_core", "periskope_clients", "periskope_checks", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
+
+[[tool.importlinter.contracts]]
+name = "core imports nothing else from the repo"
+type = "forbidden"
+source_modules = ["periskope_core"]
+forbidden_modules = ["periskope_clients", "periskope_checks", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
+
+[[tool.importlinter.contracts]]
+name = "checks import only core and clients"
+type = "forbidden"
+source_modules = ["periskope_checks"]
+forbidden_modules = ["periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
+
+[[tool.importlinter.contracts]]
+name = "the API never touches the sources"
+type = "forbidden"
+source_modules = ["periskope_api"]
+forbidden_modules = ["periskope_collector", "periskope_clients", "periskope_checks"]

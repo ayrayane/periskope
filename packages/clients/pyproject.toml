@@ -1,0 +1,12 @@
+[project]
+name = "periskope-clients"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["periskope-core", "httpx[http2]>=0.28"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+periskope-core = { workspace = true }

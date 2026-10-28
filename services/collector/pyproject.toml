@@ -1,0 +1,15 @@
+[project]
+name = "periskope-collector"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["periskope-core", "periskope-clients", "periskope-checks", "periskope-db", "arq>=0.26"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+periskope-core = { workspace = true }
+periskope-clients = { workspace = true }
+periskope-checks = { workspace = true }
+periskope-db = { workspace = true }

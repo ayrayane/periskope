@@ -1,0 +1,13 @@
+[project]
+name = "periskope-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["periskope-core", "periskope-db", "arq>=0.26", "fastapi>=0.115", "uvicorn>=0.32", "pyjwt[crypto]>=2.10", "httpx>=0.28"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+periskope-core = { workspace = true }
+periskope-db = { workspace = true }
