@@ -8,6 +8,8 @@ variables:
 
 python:
   stage: test
+  # Three images to pull on a busy runner: the first start can outlast the pod timeout.
+  retry: { max: 2, when: [runner_system_failure] }
   image: ghcr.io/astral-sh/uv:0.5.11-python3.12-bookworm-slim
   services:
     - { name: docker.io/library/postgres:16-alpine, alias: postgres }

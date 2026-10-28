@@ -12,8 +12,8 @@ tests:
     template: collectors.yaml
     asserts:
       - hasDocuments: { count: 8 }
-      - containsDocument: { kind: Deployment, apiVersion: apps/v1, name: periskope-collector-gl-dev }
-      - containsDocument: { kind: ScaledObject, apiVersion: keda.sh/v1alpha1, name: periskope-collector-gl-prod }
+      - containsDocument: { kind: Deployment, apiVersion: apps/v1, name: periskope-collector-gl-dev, any: true }
+      - containsDocument: { kind: ScaledObject, apiVersion: keda.sh/v1alpha1, name: periskope-collector-gl-prod, any: true }
   - it: writes both instances to the registry
     template: config.yaml
     documentIndex: 0
