@@ -26,9 +26,8 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        - podSelector: { matchExpressions: [{ key: app, operator: In, values: [periskope-api, periskope-scheduler, periskope-collector] }] }
+        - podSelector: { matchExpressions: [{ key: app, operator: In, values: [periskope-api, periskope-scheduler, periskope-collector, periskope-migrate] }] }
         - podSelector: { matchLabels: { cnpg.io/cluster: periskope-db } }
-        - podSelector: { matchLabels: { job-name: periskope-migrate-{{ .Release.Revision }} } }
         # The CloudNativePG operator manages the instances.
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: cnpg-system } }
 {{- end }}

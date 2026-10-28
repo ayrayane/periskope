@@ -116,3 +116,29 @@ def test_api_scope_and_launch_rules(client):
     assert client.get(f"/api/v1/runs/{first.json()['id']}").json()["status"] == "queued"
     project = client.get("/api/v1/projects/gl/team-a/app").json()
     assert project["active_run"] == first.json()["id"] and project["can_launch"]
+
+
+async def test_sync_projects_applies_exclusions(db, tmp_path):
+    import httpx
+    from periskope_clients.gitlab import GitLab
+    from periskope_collector.sync import sync_projects
+
+    def p(pid, path, kind="group", **kw):
+        ns = path.rsplit("/", 1)[0]
+        return {"id": pid, "path_with_namespace": path, "namespace": {"full_path": ns, "kind": kind}, "default_branch": "main",
+                "archived": False, "empty_repo": False, "last_activity_at": "2026-10-27T10:00:00Z", **kw}
+
+    listing = [p(7, "team-a/app"), p(8, "team-a/sub/lib"), p(11, "team-a/old", archived=True), p(12, "team-a/empty", default_branch=None),
+               p(13, "team-a/sandbox/try")]
+    gl = GitLab("https://gitlab.test", tmp_path / "t", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=listing)))
+    (tmp_path / "t").write_text("x")
+    instance = INSTANCE.model_copy(update={"excluded_namespaces": ["team-a/sandbox"]})
+    result = await sync_projects(db, gl, instance)
+    rows = {r["path"]: (r["enabled"], r["excluded_reason"]) for r in await db.fetch("SELECT path, enabled, excluded_reason FROM projects")}
+    assert rows["team-a/app"] == (True, None)
+    assert rows["team-a/old"] == (False, "projet archivé")
+    assert rows["team-a/empty"] == (False, "projet vide")
+    assert rows["team-a/sandbox/try"] == (False, "namespace exclu")
+    # Projects no longer listed are disabled, their history kept.
+    assert rows["team-ab/other"] == (False, "supprimé ou sorti des groupes suivis")
+    assert result["seen"] == 5

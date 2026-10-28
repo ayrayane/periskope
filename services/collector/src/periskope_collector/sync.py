@@ -42,7 +42,7 @@ async def sync_projects(db: asyncpg.Pool, gl: GitLab, instance: Instance) -> dic
         await conn.executemany(
             """INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch, archived,
                                      excluded_reason, enabled, sonar_key, last_activity_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8 IS NULL, $9, $10)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text, $8::text IS NULL, $9, $10)
                ON CONFLICT (instance, gitlab_id) DO UPDATE SET
                  path = excluded.path, namespace_path = excluded.namespace_path, namespace_kind = excluded.namespace_kind,
                  default_branch = excluded.default_branch, archived = excluded.archived, last_activity_at = excluded.last_activity_at,

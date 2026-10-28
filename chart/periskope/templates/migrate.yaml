@@ -1,14 +1,20 @@
-# Schema first: on install after the database exists, on upgrade before the new API starts.
+# Schema first. On upgrade, a pre-upgrade hook: the schema is ready before the new API starts. On install, a plain Job
+# next to everything else: a hook would wait for pods that cannot be ready without the schema; it retries until the
+# database is up and the services recover once it is done.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: periskope-migrate-{{ .Release.Revision }}
+  {{- if not .Release.IsInstall }}
   annotations:
-    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook: pre-upgrade
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
 spec:
-  backoffLimit: 10
+  backoffLimit: 20
+  ttlSecondsAfterFinished: 86400
   template:
+    metadata: { labels: { app: periskope-migrate } }
     spec:
       restartPolicy: OnFailure
       {{- include "periskope.pod" . | nindent 6 }}
