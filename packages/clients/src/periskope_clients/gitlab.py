@@ -4,12 +4,15 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 TOKEN_REFRESH_S = 300
+# Calls made by the current run: tasks a run spawns share its counter, concurrent runs do not.
+run_calls: ContextVar[list[int] | None] = ContextVar("run_calls", default=None)
 
 
 class SourceDown(Exception):
@@ -49,6 +52,8 @@ class GitLab:
             if self.acquire:
                 await self.acquire()
             self.calls += 1
+            if (counter := run_calls.get()) is not None:
+                counter[0] += 1
             try:
                 r = await self.http.request(method, path, headers=self._auth(), **kw)
             except httpx.TransportError as e:

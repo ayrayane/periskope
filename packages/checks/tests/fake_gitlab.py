@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from periskope_checks.context import Context
 from periskope_clients.gitlab import GitLab
 
@@ -17,7 +16,7 @@ NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
 
 def good() -> dict[str, Any]:
     """Responses for a project that passes all 40 checks (shapes as GitLab returns them)."""
-    mr = lambda branch, author, bot=False, approver="bob", auto=True: {  # noqa: E731
+    mr = lambda branch, author, bot=False, approver="bob", auto=True: {
         "createdAt": "2026-10-20T10:00:00Z", "mergedAt": "2026-10-22T10:00:00Z", "sourceBranch": branch,
         "author": {"username": author, "bot": bot}, "mergeUser": {"username": author, "bot": bot},
         "autoMergeEnabled": auto, "mergeWhenPipelineSucceeds": False,
@@ -27,7 +26,7 @@ def good() -> dict[str, Any]:
         "project": {
             "id": "gid://gitlab/Project/7", "archived": False, "visibility": "internal", "topics": ["criticite-c2"],
             "lastActivityAt": "2026-10-27T10:00:00Z", "onlyAllowMergeIfPipelineSucceeds": True, "secretPushProtectionEnabled": True,
-            "repository": {"empty": False, "rootRef": "main"},
+            "repository": {"empty": False, "rootRef": "main", "commit": {"sha": "abc123"}},
             "complianceFrameworks": {"nodes": []},
             "branchRules": {"nodes": [{"name": "main", "isDefault": True, "branchProtection": {
                 "allowForcePush": False, "pushAccessLevels": {"nodes": [{"accessLevel": 0}]}, "mergeAccessLevels": {"nodes": [{"accessLevel": 40}]}},

@@ -2,11 +2,9 @@
 import json
 
 import pytest
-
+from fake_gitlab import context, good
 from periskope_checks import REGISTRY, run_all
 from periskope_core.models import CheckStatus
-
-from fake_gitlab import context, good
 
 
 def p(d):

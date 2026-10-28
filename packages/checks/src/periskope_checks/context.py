@@ -25,7 +25,7 @@ query($path: ID!, $branch: String!, $since: Time!) {
     id archived visibility topics lastActivityAt
     onlyAllowMergeIfPipelineSucceeds
     secretPushProtectionEnabled # ee
-    repository { empty rootRef }
+    repository { empty rootRef commit(ref: $branch) { sha } }
     complianceFrameworks { nodes { name } } # ee
     branchRules { nodes { name isDefault branchProtection {
       allowForcePush pushAccessLevels { nodes { accessLevel } } mergeAccessLevels { nodes { accessLevel } } }
@@ -140,7 +140,7 @@ class Context:
     async def repo_files(self) -> dict[str, str]:
         """Every file a repository check reads, fetched in one call; files over the size cap are left out."""
         tree = await self.tree()
-        rx = re.compile(READ_FILES, re.I)
+        rx = re.compile(READ_FILES, re.IGNORECASE)
         paths = [p for p in (tree[0] if tree else []) if rx.search(p)][:MAX_FILES]
         if not paths:
             return {}

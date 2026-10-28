@@ -2,7 +2,7 @@
 name = "periskope-collector"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["periskope-core", "periskope-clients", "periskope-checks", "periskope-db", "arq>=0.26"]
+dependencies = ["structlog>=24.4", "periskope-core", "periskope-clients", "periskope-checks", "periskope-db", "arq>=0.26"]
 
 [build-system]
 requires = ["hatchling"]

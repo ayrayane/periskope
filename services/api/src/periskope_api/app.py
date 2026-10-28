@@ -1,0 +1,301 @@
+"""Periskope REST API: reads PostgreSQL only; writes are limited to launches, scope and project settings."""
+from __future__ import annotations
+
+import base64
+import json
+from contextlib import asynccontextmanager
+from datetime import timedelta
+from typing import Annotated, Any, Literal
+
+from arq import create_pool
+from arq.connections import RedisSettings
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from periskope_core.catalog import CHECKS
+from periskope_core.referential import ACTIVITIES, REFERENTIAL_VERSION
+from periskope_core.settings import env, queue
+from periskope_db import Viewer, connect, runs
+from pydantic import BaseModel, Field
+
+from periskope_api.auth import Settings, Verifier, viewer
+
+ON_DEMAND_PER_HOUR = 10
+state: dict[str, Any] = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    state["db"] = await connect(min_size=2, max_size=20)
+    state["arq"] = await create_pool(RedisSettings.from_dsn(env("VALKEY_URL", "redis://localhost:6379")))
+    state["verifier"] = Verifier(Settings.from_env(), env("OIDC_CA_FILE", "") or None)
+    yield
+    await state["arq"].aclose()
+    await state["db"].close()
+
+
+app = FastAPI(title="Periskope", lifespan=lifespan, openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs", redoc_url=None)
+api = APIRouter(prefix="/api/v1")
+
+
+def problem(status: int, detail: Any) -> JSONResponse:
+    titles = {400: "Requête invalide", 401: "Non authentifié", 403: "Interdit", 404: "Introuvable", 409: "Conflit",
+              422: "Données invalides", 429: "Trop de requêtes", 503: "Indisponible"}
+    body = {"type": "about:blank", "title": titles.get(status, "Erreur"), "status": status,
+            "detail": detail if isinstance(detail, str) else json.dumps(detail, default=str)}
+    return JSONResponse(body, status_code=status, media_type="application/problem+json")
+
+
+@app.exception_handler(HTTPException)
+async def http_error(_: Request, e: HTTPException) -> JSONResponse:
+    return problem(e.status_code, e.detail)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(_: Request, e: RequestValidationError) -> JSONResponse:
+    return problem(422, [{"loc": err["loc"], "msg": err["msg"]} for err in e.errors()])
+
+
+async def current(authorization: Annotated[str | None, Header()] = None) -> Viewer:
+    claims = await state["verifier"].claims(authorization)
+    return await viewer(state["db"], state["arq"], state["verifier"], claims)
+
+
+Me = Annotated[Viewer, Depends(current)]
+
+
+async def audit(actor: Viewer, action: str, target: str, before: Any = None, after: Any = None) -> None:
+    await state["db"].execute("INSERT INTO audit_log (actor, action, target, before, after) VALUES ($1, $2, $3, $4, $5)",
+                              actor.username, action, target, before, after)
+
+
+async def project_row(me: Viewer, instance: str, path: str) -> dict:
+    """A project the viewer may see; anything else is 404, since existence itself is information."""
+    where, params = me.where("p", 3)
+    row = await state["db"].fetchrow(
+        f"SELECT p.*, s.score, s.coverage, s.last_run_id, s.last_success_at, s.last_error, s.by_dimension, s.statuses"
+        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE p.instance = $1 AND p.path = $2 AND {where}",
+        instance, path, *params)
+    if row is None or (not row["enabled"] and not me.admin):
+        raise HTTPException(404, "projet introuvable")
+    return dict(row)
+
+
+@api.get("/health")
+async def health() -> dict:
+    await state["db"].fetchval("SELECT 1")
+    await state["arq"].ping()
+    instances = await state["db"].fetch("SELECT slug, last_sync_at FROM gitlab_instances WHERE enabled ORDER BY slug")
+    return {"status": "ok", "instances": [{"slug": i["slug"], "last_sync_at": i["last_sync_at"],
+                                           "queued": await state["arq"].zcard(queue(i["slug"]))} for i in instances]}
+
+
+@api.get("/me")
+async def me_(me: Me) -> dict:
+    return {"sub": me.sub, "username": me.username, "admin": me.admin,
+            "namespaces": sorted(f"{i}:{n}" for i, n in me.namespaces),
+            "maintains": sorted(f"{i}:{n}" for i, n in me.maintains)}
+
+
+@api.get("/instances")
+async def list_instances(me: Me) -> list[dict]:
+    rows = await state["db"].fetch("SELECT slug, name, url, enterprise, last_sync_at FROM gitlab_instances WHERE enabled ORDER BY slug")
+    return [dict(r) for r in rows]
+
+
+SORTS = {"score": "s.score", "name": "p.path", "last_run": "s.last_success_at"}
+
+
+@api.get("/projects")
+async def list_projects(
+    me: Me,
+    instance: str | None = None,
+    namespace: str | None = None,
+    q: str | None = Query(None, max_length=100),
+    below_target: bool = False,
+    failed: bool = False,
+    stale: bool = False,
+    never: bool = False,
+    sort: Literal["score", "name", "last_run"] = "name",
+    cursor: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    """The portfolio reads project_state, never runs: it pages on an index."""
+    where, params = me.where("p", 1)
+    conds = [where, "p.enabled"]
+    def arg(value: Any) -> str:
+        params.append(value)
+        return f"${len(params)}"
+    if instance:
+        conds.append(f"p.instance = {arg(instance)}")
+    if namespace:
+        n = arg(namespace)
+        conds.append(f"(p.namespace_path = {n} OR left(p.namespace_path, length({n}) + 1) = {n} || '/')")
+    if q:
+        conds.append(f"strpos(lower(p.path), lower({arg(q)})) > 0")
+    if below_target:
+        conds.append("s.score < 100")
+    if failed:
+        conds.append("s.last_error IS NOT NULL")
+    if stale:
+        conds.append("s.last_success_at < now() - interval '7 days'")
+    if never:
+        conds.append("s.last_run_id IS NULL")
+    key = SORTS[sort]
+    # Keyset on (sort key, id); NULL keys sort last.
+    order = f"{key} {'DESC' if sort != 'name' else 'ASC'} NULLS LAST, p.id"
+    if cursor:
+        last_key, last_id = json.loads(base64.urlsafe_b64decode(cursor))
+        op = ">" if sort == "name" else "<"
+        if last_key is None:
+            conds.append(f"{key} IS NULL AND p.id > {arg(last_id)}")
+        else:
+            conds.append(f"({key} {op} {arg(last_key)} OR ({key} = {arg(last_key)} AND p.id > {arg(last_id)}) OR {key} IS NULL)")
+    rows = await state["db"].fetch(
+        f"SELECT p.id, p.instance, p.path, p.namespace_path, p.default_branch, p.target_level, s.score, s.coverage,"
+        f" s.by_dimension, s.last_success_at, s.last_error, s.last_run_id, r.status AS last_status"
+        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id"
+        f" LEFT JOIN LATERAL (SELECT status FROM runs WHERE project_id = p.id AND branch = p.default_branch ORDER BY created_at DESC LIMIT 1) r ON true"
+        f" WHERE {' AND '.join(conds)} ORDER BY {order} LIMIT {limit + 1}", *params)
+    items = [dict(r) for r in rows[:limit]]
+    nxt = None
+    if len(rows) > limit:
+        last = items[-1]
+        sort_value = {"score": last["score"], "name": last["path"], "last_run": last["last_success_at"]}[sort]
+        nxt = base64.urlsafe_b64encode(json.dumps([sort_value, last["id"]], default=str).encode()).decode()
+    return {"items": items, "next_cursor": nxt}
+
+
+class RunRequest(BaseModel):
+    branch: str | None = Field(None, max_length=255)
+
+
+class ProjectPatch(BaseModel):
+    target_level: int | None = Field(None, ge=1, le=5)
+    sonar_key: str | None = Field(None, max_length=400)
+    enabled: bool | None = None
+
+
+# Routes with a suffix come before the bare project route: the GitLab path holds slashes.
+@api.post("/projects/{instance}/{path:path}/runs", status_code=202)
+async def launch(instance: str, path: str, body: RunRequest, me: Me, idempotency_key: Annotated[str | None, Header()] = None) -> dict:
+    project = await project_row(me, instance, path)
+    if not me.can_maintain(instance, path):
+        raise HTTPException(403, "lancement réservé aux mainteneurs du projet")
+    arq = state["arq"]
+    if idempotency_key and (seen := await arq.get(f"idem:{me.sub}:{idempotency_key}")):
+        return json.loads(seen)
+    branch = body.branch or project["default_branch"]
+    if branch != project["default_branch"]:
+        # Lot 2 brings branch analyses; until then only the reference branch is measured.
+        raise HTTPException(422, "seule la branche par défaut peut être analysée pour l'instant")
+    count = await arq.incr(f"quota:{me.sub}")
+    if count == 1:
+        await arq.expire(f"quota:{me.sub}", 3600)
+    if count > ON_DEMAND_PER_HOUR and not me.admin:
+        raise HTTPException(429, f"{ON_DEMAND_PER_HOUR} analyses à la demande par heure au plus")
+    try:
+        run_id = await runs.create(state["db"], project["id"], branch, "user", me.username)
+    except runs.AlreadyActive as e:
+        return JSONResponse({"id": e.run_id, "status": "already_active"}, status_code=409)
+    # shortcut: a negative defer puts user runs ahead of the nightly backlog; a second queue per priority would be cleaner.
+    await arq.enqueue_job("run_analysis", run_id, _queue_name=queue(instance), _job_id=f"run:{run_id}", _defer_by=timedelta(hours=-1))
+    await audit(me, "run.launch", f"{instance}:{path}", after={"run": run_id, "branch": branch})
+    result = {"id": run_id, "status": "queued"}
+    if idempotency_key:
+        await arq.set(f"idem:{me.sub}:{idempotency_key}", json.dumps(result), ex=600)
+    return result
+
+
+@api.get("/projects/{instance}/{path:path}/runs")
+async def project_runs(instance: str, path: str, me: Me, branch: str | None = None, status: str | None = None,
+                       cursor: int | None = None, limit: int = Query(50, ge=1, le=200)) -> dict:
+    project = await project_row(me, instance, path)
+    rows = await state["db"].fetch(
+        "SELECT id, branch, commit_sha, trigger, requested_by, status, created_at, started_at, finished_at, error, score, coverage, reused_from"
+        " FROM runs WHERE project_id = $1 AND ($2::text IS NULL OR branch = $2) AND ($3::text IS NULL OR status = $3)"
+        " AND ($4::bigint IS NULL OR id < $4) ORDER BY id DESC LIMIT $5",
+        project["id"], branch, status, cursor, limit + 1)
+    items = [dict(r) for r in rows[:limit]]
+    return {"items": items, "next_cursor": items[-1]["id"] if len(rows) > limit else None}
+
+
+@api.get("/projects/{instance}/{path:path}")
+async def project(instance: str, path: str, me: Me) -> dict:
+    p = await project_row(me, instance, path)
+    p["can_launch"] = me.can_maintain(instance, path)
+    if p["last_run_id"]:
+        p["last_run"] = dict(await state["db"].fetchrow(
+            "SELECT id, commit_sha, finished_at, results, reused_from FROM runs WHERE id = $1", p["last_run_id"]))
+    p["active_run"] = await state["db"].fetchval(
+        "SELECT id FROM runs WHERE project_id = $1 AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1", p["id"])
+    return p
+
+
+@api.patch("/projects/{instance}/{path:path}")
+async def patch_project(instance: str, path: str, body: ProjectPatch, me: Me) -> dict:
+    p = await project_row(me, instance, path)
+    if not me.can_maintain(instance, path):
+        raise HTTPException(403, "réservé aux mainteneurs du projet")
+    changes = body.model_dump(exclude_unset=True)
+    if "enabled" in changes and not me.admin:
+        raise HTTPException(403, "seul un admin réintègre ou écarte un projet")
+    if not changes:
+        return {}
+    await state["db"].execute(
+        "UPDATE projects SET target_level = coalesce($2, target_level), sonar_key = coalesce($3, sonar_key),"
+        " sonar_key_manual = sonar_key_manual OR $3 IS NOT NULL, enabled = coalesce($4, enabled),"
+        " reinstated = CASE WHEN $4 THEN true ELSE reinstated END, excluded_reason = CASE WHEN $4 THEN NULL ELSE excluded_reason END"
+        " WHERE id = $1", p["id"], changes.get("target_level"), changes.get("sonar_key"), changes.get("enabled"))
+    await audit(me, "project.update", f"{instance}:{path}", before={k: p[k] for k in changes}, after=changes)
+    return changes
+
+
+async def run_row(me: Viewer, run_id: int) -> dict:
+    where, params = me.where("p", 2)
+    row = await state["db"].fetchrow(
+        f"SELECT r.*, p.instance, p.path, p.default_branch FROM runs r JOIN projects p ON p.id = r.project_id WHERE r.id = $1 AND {where}",
+        run_id, *params)
+    if row is None:
+        raise HTTPException(404, "analyse introuvable")
+    return dict(row)
+
+
+@api.get("/runs/{run_id}")
+async def get_run(run_id: int, me: Me) -> dict:
+    run = await run_row(me, run_id)
+    run["evidence"] = await state["db"].fetchval("SELECT evidence FROM run_evidence WHERE run_id = $1", run["reused_from"] or run_id)
+    return run
+
+
+@api.delete("/runs/{run_id}", status_code=204)
+async def cancel_run(run_id: int, me: Me) -> None:
+    if not me.admin:
+        raise HTTPException(403, "réservé aux admins")
+    await run_row(me, run_id)
+    done = await state["db"].execute("UPDATE runs SET status = 'cancelled', finished_at = now() WHERE id = $1 AND status IN ('queued', 'running')", run_id)
+    if done.endswith(" 1"):
+        await audit(me, "run.cancel", str(run_id))
+
+
+@api.get("/checks")
+async def checks(me: Me) -> list[dict]:
+    decisions = {r["target_id"]: dict(r) for r in await state["db"].fetch(
+        "SELECT target_id, decision, reason, author, updated_at FROM scope_decisions WHERE target = 'check' AND instance IS NULL")}
+    return [{**c._asdict(), "scope": decisions.get(c.id)} for c in CHECKS]
+
+
+@api.get("/activities")
+async def activities(me: Me) -> dict:
+    return {"version": REFERENTIAL_VERSION, "items": [a.model_dump() for a in ACTIVITIES.values()]}
+
+
+@api.get("/scope")
+async def scope(me: Me, instance: str | None = None) -> list[dict]:
+    rows = await state["db"].fetch(
+        "SELECT target, target_id, instance, project_id, decision, reason, author, updated_at FROM scope_decisions"
+        " WHERE instance IS NULL OR instance = $1 ORDER BY target, target_id", instance)
+    return [dict(r) for r in rows]
+
+
+app.include_router(api)

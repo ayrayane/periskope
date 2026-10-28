@@ -2,7 +2,7 @@
 name = "periskope-db"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["periskope-core", "asyncpg>=0.30", "alembic>=1.14", "sqlalchemy>=2.0"]
+dependencies = ["periskope-core", "asyncpg>=0.30", "alembic>=1.14", "sqlalchemy>=2.0", "psycopg[binary]>=3.2"]
 
 [build-system]
 requires = ["hatchling"]
