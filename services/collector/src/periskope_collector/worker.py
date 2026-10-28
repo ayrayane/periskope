@@ -61,7 +61,7 @@ async def resolve_memberships(ctx: dict[str, Any], sub: str, username: str, emai
 
 
 class WorkerSettings:
-    functions = [run_analysis, analyse_project, run_sync, resolve_memberships]
+    functions = (run_analysis, analyse_project, run_sync, resolve_memberships)
     on_startup = startup
     on_shutdown = shutdown
     queue_name = queue(INSTANCE)
