@@ -1,0 +1,24 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: periskope-db }
+spec:
+  instances: {{ .Values.postgres.instances }}
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  storage: { size: {{ .Values.postgres.storage }} }
+  bootstrap: { initdb: { database: periskope, owner: periskope } }
+  {{- if .Values.postgres.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.postgres.backup.destinationPath }}
+      s3Credentials:
+        accessKeyId: { name: {{ .Values.postgres.backup.secret }}, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: {{ .Values.postgres.backup.secret }}, key: ACCESS_SECRET_KEY }
+    retentionPolicy: 30d
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata: { name: periskope-db-daily }
+spec:
+  schedule: "0 0 3 * * *"
+  cluster: { name: periskope-db }
+  {{- end }}

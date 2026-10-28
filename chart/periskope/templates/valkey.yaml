@@ -1,0 +1,29 @@
+# Queues, token buckets, webhook dedupe and the scheduler lock: nothing to persist, all rebuilt from PostgreSQL.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: periskope-valkey, labels: { app: periskope-valkey } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: periskope-valkey } }
+  template:
+    metadata: { labels: { app: periskope-valkey } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, seccompProfile: { type: RuntimeDefault } }
+      automountServiceAccountToken: false
+      containers:
+        - name: valkey
+          image: docker.io/valkey/valkey:8.0-alpine
+          args: [--save, "", --appendonly, "no", --maxmemory, 200mb, --maxmemory-policy, noeviction]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          ports: [{ name: redis, containerPort: 6379 }]
+          readinessProbe: { tcpSocket: { port: redis } }
+          resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 256Mi } }
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: periskope-valkey }
+spec:
+  selector: { app: periskope-valkey }
+  ports: [{ name: redis, port: 6379, targetPort: redis }]

@@ -1,0 +1,20 @@
+# Schema first: on install after the database exists, on upgrade before the new API starts.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: periskope-migrate-{{ .Release.Revision }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      {{- include "periskope.pod" . | nindent 6 }}
+      containers:
+        - name: migrate
+          {{- include "periskope.container" . | nindent 10 }}
+          args: [migrate]
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]

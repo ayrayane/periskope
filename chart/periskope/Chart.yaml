@@ -1,0 +1,6 @@
+apiVersion: v2
+name: periskope
+description: Periskope — DSOMM evidence for GitLab projects
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

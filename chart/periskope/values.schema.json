@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["instances", "image", "host", "oidc"],
+  "properties": {
+    "instances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slug", "name", "url"],
+        "properties": {
+          "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,40}$" },
+          "name": { "type": "string" },
+          "url": { "type": "string", "pattern": "^https?://" },
+          "ratePerMin": { "type": "integer", "minimum": 1 },
+          "enterprise": { "type": "boolean" },
+          "sonarUrl": { "type": "string" },
+          "trackedNamespaces": { "type": "array", "items": { "type": "string" } },
+          "excludedNamespaces": { "type": "array", "items": { "type": "string" } },
+          "tokenSecret": { "type": "string" },
+          "webhookSecret": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "host": { "type": "string", "minLength": 1 },
+    "oidc": { "type": "object", "required": ["issuer", "clientId", "audience"] }
+  }
+}

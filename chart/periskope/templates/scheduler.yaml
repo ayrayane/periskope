@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: periskope-scheduler, labels: { app: periskope-scheduler } }
+spec:
+  replicas: 1
+  # One active scheduler: a Valkey lock guards the planned tasks even during a rollout.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: periskope-scheduler } }
+  template:
+    metadata:
+      labels: { app: periskope-scheduler }
+      annotations: { checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }} }
+    spec:
+      {{- include "periskope.pod" . | nindent 6 }}
+      containers:
+        - name: scheduler
+          {{- include "periskope.container" . | nindent 10 }}
+          args: [scheduler]
+          ports: [{ name: http, containerPort: 8001 }]
+          readinessProbe: { httpGet: { path: /health, port: http }, periodSeconds: 10 }
+          resources: {{ toJson .Values.scheduler.resources }}
+          volumeMounts:
+            {{- include "periskope.mounts" . | nindent 12 }}
+            {{- range .Values.instances }}
+            - { name: hook-{{ .slug }}, mountPath: /var/run/secrets/periskope/gitlab-webhook-{{ .slug }}, readOnly: true }
+            {{- end }}
+      volumes:
+        {{- include "periskope.volumes" . | nindent 8 }}
+        {{- range .Values.instances }}
+        - { name: hook-{{ .slug }}, secret: { secretName: {{ include "periskope.webhookSecret" (dict "root" $ "i" .) }} } }
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata: { name: periskope-scheduler }
+spec:
+  selector: { app: periskope-scheduler }
+  ports: [{ name: http, port: 80, targetPort: http }]

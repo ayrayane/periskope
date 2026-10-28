@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: periskope-instances }
+data:
+  # The instance registry: gitlab_instances is rewritten from it at every start.
+  instances.json: |
+    [
+    {{- range $n, $i := .Values.instances }}
+      {{- if $n }},{{ end }}
+      {{ dict "slug" $i.slug "name" $i.name "url" $i.url "rate_per_min" ($i.ratePerMin | default 600) "enterprise" (ne $i.enterprise false) "sonar_url" $i.sonarUrl "tracked_namespaces" ($i.trackedNamespaces | default list) "excluded_namespaces" ($i.excludedNamespaces | default list) "ca_file" (ternary "/etc/periskope/ca/ca.crt" nil (ne $.Values.oidc.caConfigMap "")) | toJson }}
+    {{- end }}
+    ]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: periskope-frontend }
+data:
+  config.json: {{ dict "authority" .Values.oidc.issuer "clientId" .Values.oidc.clientId | toJson | quote }}

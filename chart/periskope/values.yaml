@@ -1,0 +1,78 @@
+# Adding a GitLab instance is adding an entry here: the chart generates its collector, token and webhook.
+instances: []
+#  - slug: gl-prod                 # [a-z0-9-], used in queue names, URLs and Secret names
+#    name: GitLab production
+#    url: https://gitlab.example.com
+#    ratePerMin: 600
+#    enterprise: true              # false on CE: Ultimate-only checks report unknown
+#    sonarUrl: https://sonar.example.com
+#    trackedNamespaces: [platform]
+#    excludedNamespaces: [platform/sandbox]
+#    # Without Crossplane: existing Secrets holding key "token" (read_api + read_repository, admin-wide read).
+#    tokenSecret: gitlab-token-gl-prod
+#    webhookSecret: gitlab-webhook-gl-prod
+
+image:
+  repository: registry.example.com/periskope/periskope
+  tag: ""                         # defaults to the chart appVersion
+  frontend: registry.example.com/periskope/periskope/frontend
+  pullSecret: ""
+
+host: periskope.example.com
+ingress:
+  className: ""
+  annotations: {}
+  tlsSecret: periskope-tls
+
+oidc:
+  issuer: https://keycloak.example.com/realms/periskope
+  clientId: periskope
+  audience: periskope
+  # ConfigMap with a ca.crt when Keycloak or GitLab use a private CA.
+  caConfigMap: ""
+
+# OIDC client declared through the Keycloak operator (26.8+ KeycloakOIDCClient).
+keycloakClient:
+  enabled: false
+  keycloak: keycloak              # name of the Keycloak CR
+  namespace: keycloak
+  realm: periskope
+
+crossplane:
+  # When enabled, a claim per instance creates the read token and the system hook; tokenSecret/webhookSecret are ignored.
+  # The kinds come from the platform's own XRDs and Compositions (outside this chart): set them to match.
+  enabled: false
+  providerConfigPrefix: gitlab-
+  apiVersion: platform.example.com/v1alpha1
+  tokenKind: GitLabReadToken
+  hookKind: GitLabSystemHook
+
+keda:
+  # When enabled, each collector scales 0-2 on its queue depth; otherwise one replica per instance.
+  enabled: false
+  minReplicas: 1
+  threshold: 200
+
+postgres:
+  instances: 2
+  storage: 20Gi
+  backup:
+    enabled: false
+    destinationPath: ""           # s3://bucket/periskope
+    secret: ""                    # Secret with ACCESS_KEY_ID / ACCESS_SECRET_KEY
+
+api:
+  replicas: 2
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 512Mi } }
+collector:
+  concurrency: 20
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+scheduler:
+  resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 256Mi } }
+timezone: Europe/Paris
+
+networkPolicy:
+  enabled: true
+  # Pods allowed to reach the API, frontend and webhook receiver: the ingress controller.
+  ingressFrom:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }

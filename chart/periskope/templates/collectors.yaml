@@ -1,0 +1,61 @@
+{{- range .Values.instances }}
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: periskope-collector-{{ .slug }}, labels: { app: periskope-collector, instance: {{ .slug }} } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: periskope-collector, instance: {{ .slug }} } }
+  template:
+    metadata:
+      labels: { app: periskope-collector, instance: {{ .slug }} }
+      annotations: { checksum/config: {{ include (print $.Template.BasePath "/config.yaml") $ | sha256sum }} }
+    spec:
+      {{- include "periskope.pod" $ | nindent 6 }}
+      containers:
+        - name: collector
+          {{- include "periskope.container" $ | nindent 10 }}
+            - { name: PERISKOPE_INSTANCE, value: {{ .slug }} }
+            - { name: PERISKOPE_COLLECTOR_CONCURRENCY, value: {{ $.Values.collector.concurrency | quote }} }
+          args: [collector]
+          resources: {{ toJson $.Values.collector.resources }}
+          volumeMounts:
+            {{- include "periskope.mounts" $ | nindent 12 }}
+            # A file, not a variable: a rotated token is re-read without a restart.
+            - { name: token, mountPath: /var/run/secrets/periskope/gitlab-token-{{ .slug }}, readOnly: true }
+      volumes:
+        {{- include "periskope.volumes" $ | nindent 8 }}
+        - { name: token, secret: { secretName: {{ include "periskope.tokenSecret" (dict "root" $ "i" .) }} } }
+---
+{{- if $.Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: periskope-collector-{{ .slug }} }
+spec:
+  scaleTargetRef: { name: periskope-collector-{{ .slug }} }
+  minReplicaCount: {{ $.Values.keda.minReplicas }}
+  maxReplicaCount: 2
+  triggers:
+    - type: redis
+      metadata: { address: "periskope-valkey:6379", listName: "collect:{{ .slug }}", listLength: {{ $.Values.keda.threshold | quote }}, dataType: zset }
+---
+{{- end }}
+{{- if $.Values.crossplane.enabled }}
+apiVersion: {{ $.Values.crossplane.apiVersion }}
+kind: {{ $.Values.crossplane.tokenKind }}
+metadata: { name: periskope-{{ .slug }} }
+spec:
+  providerConfigRef: { name: {{ $.Values.crossplane.providerConfigPrefix }}{{ .slug }} }
+  scopes: [read_api, read_repository]
+  writeConnectionSecretToRef: { name: gitlab-token-{{ .slug }} }
+---
+apiVersion: {{ $.Values.crossplane.apiVersion }}
+kind: {{ $.Values.crossplane.hookKind }}
+metadata: { name: periskope-{{ .slug }} }
+spec:
+  providerConfigRef: { name: {{ $.Values.crossplane.providerConfigPrefix }}{{ .slug }} }
+  url: https://{{ $.Values.host }}/hooks/gitlab/{{ .slug }}
+  events: [push, merge_request, repository_update]
+  writeConnectionSecretToRef: { name: gitlab-webhook-{{ .slug }} }
+---
+{{- end }}
+{{- end }}

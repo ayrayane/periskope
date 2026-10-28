@@ -1,0 +1,92 @@
+# Monorepo CI: tests and boundaries on every MR, images and chart on tags (same version for all three).
+stages: [test, build, publish]
+
+variables:
+  UV_CACHE_DIR: .uv-cache
+
+.changes-python: &python [packages/**/*, services/**/*, tests/**/*, pyproject.toml, uv.lock]
+
+python:
+  stage: test
+  image: ghcr.io/astral-sh/uv:0.5.11-python3.12-bookworm-slim
+  services:
+    - { name: postgres:16-alpine, alias: postgres }
+    - { name: valkey/valkey:8-alpine, alias: valkey }
+  variables:
+    POSTGRES_USER: periskope
+    POSTGRES_PASSWORD: ci
+    PERISKOPE_TEST_DATABASE_URL: postgresql://periskope:ci@postgres:5432/periskope
+    PERISKOPE_TEST_VALKEY_URL: redis://valkey:6379
+  rules: [{ changes: *python }, { if: $CI_COMMIT_TAG }]
+  script:
+    - uv sync --frozen
+    - uv run ruff check .
+    - uv run lint-imports
+    - uv run pytest -q --junitxml=report.xml
+  cache: { key: uv, paths: [.uv-cache] }
+  artifacts: { reports: { junit: report.xml }, when: always }
+
+frontend:
+  stage: test
+  image: node:22-alpine
+  rules: [{ changes: [frontend/**/*] }, { if: $CI_COMMIT_TAG }]
+  script:
+    - cd frontend && npm ci && npm run typecheck && npm test && npm run build
+
+chart:lint:
+  stage: test
+  image: alpine/helm:3.16.3
+  rules: [{ changes: [chart/**/*] }, { if: $CI_COMMIT_TAG }]
+  script:
+    - helm lint chart/periskope -f chart/periskope/ci-values.yaml
+
+chart:render:
+  stage: test
+  image: alpine/helm:3.16.3
+  rules: [{ changes: [chart/**/*] }]
+  script:
+    - wget -qO- https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin
+    - helm template periskope chart/periskope -f chart/periskope/ci-values.yaml
+      | kubeconform -strict -summary -ignore-missing-schemas
+        -schema-location default
+        -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+chart:unittest:
+  stage: test
+  image: alpine/helm:3.16.3
+  rules: [{ changes: [chart/**/*] }]
+  script:
+    - helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.3
+    - helm unittest chart/periskope
+
+.kaniko:
+  image: { name: gcr.io/kaniko-project/executor:v1.23.2-debug, entrypoint: [""] }
+  before_script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - CERT=""; if [ -n "$CI_SERVER_TLS_CA_FILE" ]; then CERT="--registry-certificate $CI_REGISTRY=$CI_SERVER_TLS_CA_FILE"; fi
+    - TAG="${CI_COMMIT_TAG#v}"; TAG="${TAG:-$CI_COMMIT_SHORT_SHA}"
+
+image:python:
+  stage: build
+  extends: .kaniko
+  rules: [{ if: $CI_COMMIT_TAG }, { if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH, changes: *python }]
+  script:
+    - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile Dockerfile $CERT --destination "$CI_REGISTRY_IMAGE:$TAG"
+
+image:frontend:
+  stage: build
+  extends: .kaniko
+  rules: [{ if: $CI_COMMIT_TAG }, { if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH, changes: [frontend/**/*] }]
+  script:
+    - /kaniko/executor --context "$CI_PROJECT_DIR/frontend" --dockerfile Dockerfile $CERT --destination "$CI_REGISTRY_IMAGE/frontend:$TAG"
+
+chart:publish:
+  stage: publish
+  image: alpine/helm:3.16.3
+  rules: [{ if: $CI_COMMIT_TAG }]
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - helm package chart/periskope --version "$VERSION" --app-version "$VERSION"
+    - echo "$CI_REGISTRY_PASSWORD" | helm registry login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin ${CI_SERVER_TLS_CA_FILE:+--ca-file $CI_SERVER_TLS_CA_FILE}
+    - helm push "periskope-$VERSION.tgz" "oci://$CI_REGISTRY_IMAGE/charts" ${CI_SERVER_TLS_CA_FILE:+--ca-file $CI_SERVER_TLS_CA_FILE}

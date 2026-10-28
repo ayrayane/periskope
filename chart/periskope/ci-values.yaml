@@ -1,0 +1,3 @@
+host: periskope.ci.test
+instances:
+  - { slug: gl-ci, name: CI, url: https://gitlab.ci.test, trackedNamespaces: [team] }

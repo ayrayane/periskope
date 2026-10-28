@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: periskope-frontend, labels: { app: periskope-frontend } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: periskope-frontend } }
+  template:
+    metadata:
+      labels: { app: periskope-frontend }
+      annotations: { checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }} }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 101, seccompProfile: { type: RuntimeDefault } }
+      automountServiceAccountToken: false
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets: [{ name: {{ . }} }]
+      {{- end }}
+      containers:
+        - name: frontend
+          image: {{ .Values.image.frontend }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /, port: http } }
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+          volumeMounts:
+            - { name: config, mountPath: /usr/share/nginx/html/config.json, subPath: config.json, readOnly: true }
+            - { name: cache, mountPath: /var/cache/nginx }
+            - { name: run, mountPath: /tmp }
+      volumes:
+        - { name: config, configMap: { name: periskope-frontend } }
+        - { name: cache, emptyDir: {} }
+        - { name: run, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: periskope-frontend }
+spec:
+  selector: { app: periskope-frontend }
+  ports: [{ name: http, port: 80, targetPort: http }]

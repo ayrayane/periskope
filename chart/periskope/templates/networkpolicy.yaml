@@ -1,0 +1,34 @@
+{{- if .Values.networkPolicy.enabled }}
+# Exposed pods take traffic from the ingress controller only; Valkey and PostgreSQL from Periskope's own pods.
+{{- range list "periskope-api" "periskope-frontend" "periskope-scheduler" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: {{ . }} }
+spec:
+  podSelector: { matchLabels: { app: {{ . }} } }
+  policyTypes: [Ingress]
+  ingress: [{ from: [{{ toJson $.Values.networkPolicy.ingressFrom }}] }]
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: periskope-valkey }
+spec:
+  podSelector: { matchLabels: { app: periskope-valkey } }
+  policyTypes: [Ingress]
+  ingress: [{ from: [{ podSelector: { matchExpressions: [{ key: app, operator: In, values: [periskope-api, periskope-scheduler, periskope-collector] }] } }] }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: periskope-db }
+spec:
+  podSelector: { matchLabels: { cnpg.io/cluster: periskope-db } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchExpressions: [{ key: app, operator: In, values: [periskope-api, periskope-scheduler, periskope-collector] }] }
+        - podSelector: { matchLabels: { cnpg.io/cluster: periskope-db } }
+        - podSelector: { matchLabels: { job-name: periskope-migrate-{{ .Release.Revision }} } }
+        # The CloudNativePG operator manages the instances.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: cnpg-system } }
+{{- end }}

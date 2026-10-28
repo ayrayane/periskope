@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: periskope
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls: [{ hosts: [{{ .Values.host }}], secretName: {{ .Values.ingress.tlsSecret }} }]
+  rules:
+    - host: {{ .Values.host }}
+      http:
+        paths:
+          - { path: /api, pathType: Prefix, backend: { service: { name: periskope-api, port: { name: http } } } }
+          - { path: /hooks, pathType: Prefix, backend: { service: { name: periskope-scheduler, port: { name: http } } } }
+          - { path: /, pathType: Prefix, backend: { service: { name: periskope-frontend, port: { name: http } } } }

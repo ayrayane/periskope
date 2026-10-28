@@ -1,0 +1,27 @@
+{{- if .Values.keycloakClient.enabled }}
+# Public client with PKCE; the API checks aud, so an audience mapper adds the client id.
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakOIDCClient
+metadata: { name: periskope, namespace: {{ .Values.keycloakClient.namespace }} }
+spec:
+  keycloakCRName: {{ .Values.keycloakClient.keycloak }}
+  realm: {{ .Values.keycloakClient.realm }}
+  client:
+    clientId: {{ .Values.oidc.clientId }}
+    publicClient: true
+    standardFlowEnabled: true
+    directAccessGrantsEnabled: false
+    redirectUris: ["https://{{ .Values.host }}/*"]
+    webOrigins: ["https://{{ .Values.host }}"]
+    postLogoutRedirectUris: ["https://{{ .Values.host }}/*"]
+    attributes: { pkce.code.challenge.method: S256 }
+    protocolMappers:
+      - name: audience
+        protocol: openid-connect
+        protocolMapper: oidc-audience-mapper
+        config: { included.client.audience: {{ .Values.oidc.audience }}, access.token.claim: "true", id.token.claim: "false" }
+      - name: groups
+        protocol: openid-connect
+        protocolMapper: oidc-group-membership-mapper
+        config: { claim.name: groups, full.path: "false", access.token.claim: "true", id.token.claim: "false" }
+{{- end }}

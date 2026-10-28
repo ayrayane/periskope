@@ -1,0 +1,22 @@
+suite: one collector per instance
+templates: [collectors.yaml, config.yaml]
+set:
+  host: periskope.test
+  keda: { enabled: true }
+  crossplane: { enabled: true }
+  instances:
+    - { slug: gl-prod, name: Prod, url: https://gl-prod.test }
+    - { slug: gl-dev, name: Dev, url: https://gl-dev.test, enterprise: false }
+tests:
+  - it: renders a Deployment, a ScaledObject and two claims per instance
+    template: collectors.yaml
+    asserts:
+      - hasDocuments: { count: 8 }
+      - containsDocument: { kind: Deployment, apiVersion: apps/v1, name: periskope-collector-gl-dev }
+      - containsDocument: { kind: ScaledObject, apiVersion: keda.sh/v1alpha1, name: periskope-collector-gl-prod }
+  - it: writes both instances to the registry
+    template: config.yaml
+    documentIndex: 0
+    asserts:
+      - matchRegex: { path: data["instances.json"], pattern: '"slug":"gl-dev"' }
+      - matchRegex: { path: data["instances.json"], pattern: '"enterprise":false' }
