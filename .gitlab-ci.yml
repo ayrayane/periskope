@@ -10,8 +10,8 @@ python:
   stage: test
   image: ghcr.io/astral-sh/uv:0.5.11-python3.12-bookworm-slim
   services:
-    - { name: postgres:16-alpine, alias: postgres }
-    - { name: valkey/valkey:8-alpine, alias: valkey }
+    - { name: docker.io/library/postgres:16-alpine, alias: postgres }
+    - { name: docker.io/valkey/valkey:8-alpine, alias: valkey }
   variables:
     POSTGRES_USER: periskope
     POSTGRES_PASSWORD: ci

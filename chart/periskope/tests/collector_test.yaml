@@ -18,5 +18,9 @@ tests:
     template: config.yaml
     documentIndex: 0
     asserts:
-      - matchRegex: { path: data["instances.json"], pattern: '"slug":"gl-dev"' }
-      - matchRegex: { path: data["instances.json"], pattern: '"enterprise":false' }
+      - matchRegex:
+          path: data["instances.json"]
+          pattern: '"slug":"gl-dev"'
+      - matchRegex:
+          path: data["instances.json"]
+          pattern: '"enterprise":false'
