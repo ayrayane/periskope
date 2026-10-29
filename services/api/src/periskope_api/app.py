@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Annotated, Any, Literal
@@ -12,6 +13,7 @@ from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from periskope_core.catalog import CHECKS
 from periskope_core.diff import diff
@@ -42,6 +44,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Periskope", lifespan=lifespan, openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs", redoc_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 api = APIRouter(prefix="/api/v1")
 
 
@@ -63,9 +66,22 @@ async def validation_error(_: Request, e: RequestValidationError) -> JSONRespons
     return problem(422, [{"loc": err["loc"], "msg": err["msg"]} for err in e.errors()])
 
 
+VIEWER_TTL_S = 60
+
+
 async def current(authorization: Annotated[str | None, Header()] = None) -> Viewer:
+    """The token is checked on every call; the scope built from it is kept a minute per token (well under the 15 min rule)."""
     claims = await state["verifier"].claims(authorization)
-    return await viewer(state["db"], state["arq"], state["verifier"], claims)
+    cache = state.setdefault("viewers", {})
+    key = (claims["sub"], claims.get("iat"), claims.get("exp"))
+    hit = cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    v = await viewer(state["db"], state["arq"], state["verifier"], claims)
+    if len(cache) > 10_000:
+        cache.clear()
+    cache[key] = (time.monotonic() + VIEWER_TTL_S, v)
+    return v
 
 
 Me = Annotated[Viewer, Depends(current)]
@@ -153,17 +169,18 @@ async def list_projects(
     order = f"{key} {'DESC' if sort != 'name' else 'ASC'} NULLS LAST, p.id"
     if cursor:
         last_key, last_id = json.loads(base64.urlsafe_b64decode(cursor))
-        op = ">" if sort == "name" else "<"
-        if last_key is None:
+        if sort == "name":
+            conds.append(f"(p.path, p.id) > ({arg(last_key)}, {arg(last_id)})")
+        elif last_key is None:
             conds.append(f"{key} IS NULL AND p.id > {arg(last_id)}")
         else:
-            conds.append(f"({key} {op} {arg(last_key)} OR ({key} = {arg(last_key)} AND p.id > {arg(last_id)}) OR {key} IS NULL)")
+            conds.append(f"({key} < {arg(last_key)} OR ({key} = {arg(last_key)} AND p.id > {arg(last_id)}) OR {key} IS NULL)")
+    # The page first, then the latest run of its rows only: never one lookup per project of the whole portfolio.
     rows = await state["db"].fetch(
-        f"SELECT p.id, p.instance, p.path, p.namespace_path, p.default_branch, p.target_level, s.score, s.coverage,"
-        f" s.by_dimension, s.last_success_at, s.last_error, s.last_run_id, r.status AS last_status"
-        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id"
-        f" LEFT JOIN LATERAL (SELECT status FROM runs WHERE project_id = p.id AND branch = p.default_branch ORDER BY created_at DESC LIMIT 1) r ON true"
-        f" WHERE {' AND '.join(conds)} ORDER BY {order} LIMIT {limit + 1}", *params)
+        f"SELECT page.*, (SELECT status FROM runs WHERE project_id = page.id AND branch = page.default_branch ORDER BY created_at DESC LIMIT 1)"
+        f" AS last_status FROM (SELECT p.id, p.instance, p.path, p.namespace_path, p.default_branch, p.target_level, s.score, s.coverage,"
+        f" s.last_success_at, s.last_error, s.last_run_id FROM projects p LEFT JOIN project_state s ON s.project_id = p.id"
+        f" WHERE {' AND '.join(conds)} ORDER BY {order} LIMIT {limit + 1}) page", *params)
     items = [dict(r) for r in rows[:limit]]
     nxt = None
     if len(rows) > limit:
@@ -312,9 +329,17 @@ async def run_row(me: Viewer, run_id: int) -> dict:
 
 @api.get("/runs/{run_id}")
 async def get_run(run_id: int, me: Me) -> dict:
+    return await run_row(me, run_id)
+
+
+@api.get("/runs/{run_id}/evidence")
+async def run_evidence(run_id: int, me: Me) -> dict:
+    """Raw evidence, kept 14 days; a reused analysis points to the original's."""
     run = await run_row(me, run_id)
-    run["evidence"] = await state["db"].fetchval("SELECT evidence FROM run_evidence WHERE run_id = $1", run["reused_from"] or run_id)
-    return run
+    evidence = await state["db"].fetchval(
+        "SELECT evidence FROM run_evidence WHERE run_id = $1 AND created_at >= $2::timestamptz - interval '1 day'",
+        run["reused_from"] or run_id, run["created_at"])
+    return {"evidence": evidence}
 
 
 @api.get("/runs/{run_id}/diff")
@@ -328,6 +353,9 @@ async def run_diff(run_id: int, me: Me, against: int | Literal["previous"] | Non
         if against is None:
             raise HTTPException(404, "pas d'analyse précédente sur cette branche")
     elif against is None:
+        # A branch is compared with the reference; the reference with its own previous analysis.
+        if run["branch"] == run["default_branch"]:
+            return await run_diff(run_id, me, "previous")
         against = await state["db"].fetchval("SELECT last_run_id FROM project_state WHERE project_id = $1", run["project_id"])
         if against is None:
             raise HTTPException(404, "aucune analyse de référence pour ce projet")

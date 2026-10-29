@@ -29,7 +29,7 @@ export function CheckBadge({ status }: { status: CheckStatus }) {
 export function ActivityBadge({ status, toConfirm }: { status: ActivityStatus; toConfirm?: boolean }) {
   const s = ACTIVITY[status];
   return (
-    <span className={`badge tone-${s.tone}${status === "partial" ? " partial" : ""}`}>
+    <span className={`badge tone-${s.tone}`}>
       <span aria-hidden="true">{s.icon}</span> {s.label}
       {toConfirm && <span className="to-confirm"> · à confirmer</span>}
     </span>
@@ -49,6 +49,11 @@ export function Score({ score, coverage, size = "md" }: { score: number | null; 
     </span>
   );
 }
+
+export const RUN_LABEL: Record<string, string> = {
+  queued: "En file d'attente", running: "Analyse en cours", succeeded: "Terminée", failed: "Échec", cancelled: "Annulée",
+};
+export const TRIGGER: Record<string, string> = { user: "à la demande", webhook: "push sur la branche", nightly: "revue nocturne" };
 
 export const when = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : "—";

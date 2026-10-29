@@ -3,9 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, Check, Diff, RunDetail } from "../api";
-import { CheckBadge, Score, when } from "../components/status";
-
-const LABEL = { queued: "En file d'attente", running: "Analyse en cours", succeeded: "Terminée", failed: "Échec", cancelled: "Annulée" };
+import { CheckBadge, RUN_LABEL as LABEL, Score, when } from "../components/status";
 
 export default function Run() {
   const { id = "" } = useParams();
@@ -14,6 +12,13 @@ export default function Run() {
     queryKey: ["run-detail", id],
     queryFn: () => api<RunDetail>(`/runs/${id}`),
     refetchInterval: (q) => (["queued", "running"].includes(q.state.data?.status ?? "") ? (Date.now() - startedAt > 120_000 ? 10_000 : 3_000) : false),
+  });
+  // Fetched alongside the run, not after it: the API picks the comparison (previous run on the reference, the reference for a branch).
+  const diff = useQuery({
+    queryKey: ["diff", id, run.data?.status],
+    queryFn: () => api<Diff>(`/runs/${id}/diff`),
+    enabled: run.data?.status !== "queued" && run.data?.status !== "running",
+    retry: false,
   });
   const checks = useQuery({ queryKey: ["checks"], queryFn: () => api<Check[]>("/checks"), staleTime: Infinity });
   if (run.isError) return <p className="error" role="alert">{(run.error as ApiError).status === 404 ? "Analyse introuvable." : (run.error as Error).message}</p>;
@@ -34,17 +39,19 @@ export default function Run() {
       )}
       <header className="project-head">
         <div>
-          <h1 id="run-title">Analyse de <code>{r.branch}</code></h1>
-          <p className="muted" aria-live="polite">
+          <h1 id="run-title" tabIndex={-1}>Analyse de <code>{r.branch}</code></h1>
+          <p className="muted" role="status">
             {LABEL[r.status]}{r.finished_at && <> le {when(r.finished_at)}</>}{r.commit_sha && <> sur <code>{r.commit_sha.slice(0, 8)}</code></>}
-            {r.requested_by && <> · lancée par {r.requested_by}</>}{r.error && <> · {r.error}</>}
+            {r.requested_by && <> · lancée par {r.requested_by}</>}
           </p>
         </div>
         {done && <Score score={r.score} coverage={r.coverage} size="lg" />}
       </header>
+      {r.status === "failed" && <p className="error" role="alert">Échec : {r.error}</p>}
+      {(r.status === "queued" || r.status === "running") && <p className="empty">Analyse {r.status === "queued" ? "en file d'attente" : "en cours"} : la page se met à jour toute seule.</p>}
       {done && (
         <>
-          <DiffView id={r.id} against={reference ? "previous" : undefined}
+          <DiffView diff={diff.data} error={diff.error as Error | null} id={r.id}
             title={reference ? "Changements depuis l'analyse précédente" : "Comparaison avec la branche de référence"} />
           <section className="group">
             <h2>Preuves</h2>
@@ -53,7 +60,7 @@ export default function Run() {
               <tbody>
                 {(checks.data ?? []).filter((c) => r.results?.[c.id]).map((c) => (
                   <tr key={c.id}>
-                    <td><span className="mono small">{c.id}</span><br />{c.title}</td>
+                    <td>{c.title}<br /><span className="mono small muted">{c.id}</span></td>
                     <td><CheckBadge status={r.results![c.id].status} /></td>
                     <td>{r.results![c.id].message}</td>
                   </tr>
@@ -67,21 +74,16 @@ export default function Run() {
   );
 }
 
-function DiffView({ id, against, title }: { id: number; against?: "previous"; title: string }) {
-  const diff = useQuery({
-    queryKey: ["diff", id, against],
-    queryFn: () => api<Diff>(`/runs/${id}/diff${against ? `?against=${against}` : ""}`),
-    retry: false,
-  });
-  if (diff.isError) return <p className="muted">{(diff.error as Error).message}</p>;
-  if (!diff.data) return null;
-  const d = diff.data;
+function DiffView({ diff, error, id, title }: { diff?: Diff; error: Error | null; id: number; title: string }) {
+  if (error) return <p className="muted">{error.message}</p>;
+  if (!diff) return null;
+  const d = diff;
   const delta = d.after.score != null && d.before.score != null ? Math.round(d.after.score - d.before.score) : null;
   const rows = (list: Diff["gained"], label: string, tone: string) =>
     list.length > 0 && (
       <div className="diff-group">
         <h3 className={tone}>{label} ({list.length})</h3>
-        <ul>{list.map((x) => <li key={x.check}><span className="mono small">{x.check}</span> — {x.after_message}<span className="muted small"> (avant : {x.before_message})</span></li>)}</ul>
+        <ul>{list.map((x) => <li key={x.check}>{x.after_message}<span className="muted small"> (avant : {x.before_message}) · <span className="mono">{x.check}</span></span></li>)}</ul>
       </div>
     );
   return (

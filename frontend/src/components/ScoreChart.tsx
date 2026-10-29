@@ -46,7 +46,8 @@ export default function ScoreChart({ runs }: { runs: Run[] }) {
           ))}
         </svg>
         {h && (
-          <div className="tooltip" role="status" style={{ left: `${(x(h) / W) * 100}%` }}>
+          // No live region: the history table below gives the same values to keyboard and screen-reader users.
+          <div className="tooltip" style={{ left: `${Math.min(85, Math.max(15, (x(h) / W) * 100))}%` }}>
             <strong>{Math.round(h.score!)}/100</strong> <span className="muted">couverture {Math.round(h.coverage ?? 0)} %</span>
             <br /><span className="muted small">{when(h.created_at)} · cliquer pour ouvrir</span>
           </div>

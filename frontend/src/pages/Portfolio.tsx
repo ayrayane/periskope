@@ -1,7 +1,7 @@
 // Portfolio: the projects in the viewer's scope, paged by the server, filters in the URL so a link can be shared.
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ProjectRow } from "../api";
 import { Score, when } from "../components/status";
@@ -20,17 +20,23 @@ export default function Portfolio() {
   query.set("limit", "50");
   const projects = useInfiniteQuery({
     queryKey: ["projects", query.toString()],
-    queryFn: ({ pageParam }) => {
+    queryFn: ({ pageParam, signal }) => {
       const q = new URLSearchParams(query);
       if (pageParam) q.set("cursor", pageParam);
-      return api<{ items: ProjectRow[]; next_cursor: string | null }>(`/projects?${q}`);
+      return api<{ items: ProjectRow[]; next_cursor: string | null }>(`/projects?${q}`, { signal });
     },
     initialPageParam: "",
     getNextPageParam: (last) => last.next_cursor ?? undefined,
+    // Coming back keeps the list for 30 s and refetches at most 10 pages, never the whole scroll history.
+    staleTime: 30_000,
+    maxPages: 10,
+    placeholderData: keepPreviousData,
   });
   const rows = projects.data?.pages.flatMap((p) => p.items) ?? [];
   const scroller = useRef<HTMLDivElement>(null);
-  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => 56, overscan: 10 });
+  // Rows wrap on a phone: each one is measured instead of assumed 56 px high.
+  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => 64, overscan: 10 });
+  const [search, setSearch] = useState(params.get("q") ?? "");
   const items = virtual.getVirtualItems();
   const lastIndex = items.at(-1)?.index ?? 0;
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = projects;
@@ -38,6 +44,11 @@ export default function Portfolio() {
     if (lastIndex >= rows.length - 5 && hasNextPage && !isFetchingNextPage) fetchNextPage();
   }, [lastIndex, rows.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
+  // The search goes to the URL (and the API) 300 ms after the last keystroke, not on each one.
+  useEffect(() => {
+    const id = setTimeout(() => { if ((params.get("q") ?? "") !== search) set("q", search || null); }, 300);
+    return () => clearTimeout(id);
+  });
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
@@ -55,12 +66,12 @@ export default function Portfolio() {
   return (
     <section aria-labelledby="portfolio-title">
       <div className="page-head">
-        <h1 id="portfolio-title">Portefeuille</h1>
+        <h1 id="portfolio-title" tabIndex={-1}>Portefeuille</h1>
       </div>
       <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="search">
           <span className="sr-only">Rechercher un projet</span>
-          <input type="search" placeholder="Rechercher un projet" defaultValue={params.get("q") ?? ""} onChange={(e) => set("q", e.target.value || null)} />
+          <input type="search" placeholder="Rechercher un projet" value={search} onChange={(e) => setSearch(e.target.value)} />
         </label>
         {FILTERS.map(([key, label]) => (
           <label key={key} className="chip">
@@ -75,12 +86,12 @@ export default function Portfolio() {
         <p className="empty">Aucun projet dans votre périmètre ne correspond. Vous voyez les projets dont vous êtes membre dans GitLab.</p>
       )}
 
-      <div className="table" role="table" aria-label="Projets" aria-rowcount={rows.length + 1}>
+      {rows.length > 0 && <div className="table" role="table" aria-label="Projets" aria-rowcount={rows.length + 1}>
         <div role="rowgroup">
           <div role="row" className="row head">
             {sortHeader("name", "Projet")}
             {sortHeader("score", "Score")}
-            {sortHeader("last_run", "Dernière analyse")}
+            {sortHeader("last_run", "Dernière réussite")}
             <div role="columnheader">État</div>
           </div>
         </div>
@@ -89,7 +100,7 @@ export default function Portfolio() {
             {items.map((v) => {
               const p = rows[v.index];
               return (
-                <div role="row" key={p.id} className="row" aria-rowindex={v.index + 2}
+                <div role="row" key={p.id} className="row" aria-rowindex={v.index + 2} ref={virtual.measureElement} data-index={v.index}
                   style={{ position: "absolute", top: 0, transform: `translateY(${v.start}px)`, width: "100%" }}>
                   <div role="cell" className="name">
                     <Link to={`/p/${p.instance}/${p.path}`}>{p.path}</Link>
@@ -97,14 +108,14 @@ export default function Portfolio() {
                   </div>
                   <div role="cell"><Score score={p.score} coverage={p.coverage} /></div>
                   <div role="cell">{when(p.last_success_at)}</div>
-                  <div role="cell">{p.last_error ? <span className="badge tone-fail">Échec : {p.last_error}</span> : p.last_status === "running" || p.last_status === "queued" ? <span className="badge tone-unknown">En cours</span> : null}</div>
+                  <div role="cell">{p.last_error ? <span className="badge tone-fail">Échec : {p.last_error}</span> : p.last_status === "running" || p.last_status === "queued" ? <span className="badge tone-running">En cours</span> : null}</div>
                 </div>
               );
             })}
           </div>
         </div>
-      </div>
-      {projects.isFetching && <p className="page-status" role="status">Chargement…</p>}
+      </div>}
+      <p className="page-status" role="status">{projects.isLoading || projects.isFetchingNextPage ? "Chargement…" : ""}</p>
     </section>
   );
 }

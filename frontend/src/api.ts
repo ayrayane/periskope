@@ -8,6 +8,7 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // init.signal lets TanStack Query abort a request whose answer nobody waits for any more.
   const user = await (await userManager()).getUser();
   const res = await fetch(`/api/v1${path}`, {
     ...init,
