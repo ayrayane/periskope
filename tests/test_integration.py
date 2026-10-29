@@ -21,7 +21,9 @@ PROJECTS = [(7, "team-a/app", "team-a"), (8, "team-a/sub/lib", "team-a/sub"), (9
 async def db(database_url):
     pool = await connect(database_url)
     await bootstrap(pool, {"gl": INSTANCE})
+    # CASCADE also empties scope_decisions (it references projects): bootstrap again for the default decisions.
     await pool.execute("TRUNCATE projects, runs, project_state, fingerprints, run_evidence CASCADE")
+    await bootstrap(pool, {"gl": INSTANCE})
     await pool.executemany(
         "INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch, sonar_key)"
         " VALUES ('gl', $1, $2, $3, 'group', 'main', replace($2, '/', '_'))",
@@ -158,3 +160,33 @@ async def test_sync_projects_applies_exclusions(db, tmp_path):
     # Projects no longer listed are disabled, their history kept.
     assert rows["team-ab/other"] == (False, "supprimé ou sorti des groupes suivis")
     assert result["seen"] == 5
+
+
+def test_scope_api(client, db, tmp_path):
+    import asyncio
+
+    from periskope_collector.analysis import analyse
+
+    async def analysed():
+        pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
+        project_id = await pool.fetchval("SELECT id FROM projects WHERE gitlab_id = 7")
+        run = await runs.create(pool, project_id, "main", "user", "alice")
+        ctx = context(good(), tmp_path)
+        await analyse(pool, ctx.gl, run, enterprise=True, sonar=ctx.sonar)
+        await pool.close()
+    asyncio.run(analysed())
+
+    member = Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}), maintains=frozenset({("gl", "team-a")}))
+    client.who["v"] = member
+    item = {"target": "activity", "target_id": "Version control", "decision": "excluded", "reason": "dépôt miroir"}
+    assert client.put("/api/v1/scope", json={"items": [item]}).status_code == 403  # organisation level: admins only
+    assert client.put("/api/v1/scope", json={"instance": "gl", "project": "team-a/app", "items": [{**item, "reason": "x"}]}).status_code == 422
+    assert client.put("/api/v1/scope", json={"instance": "gl", "project": "team-a/app", "items": [item]}).status_code == 200
+    project = client.get("/api/v1/projects/gl/team-a/app").json()
+    assert project["statuses"]["Version control"]["status"] == "out_of_scope"
+    rows = {(r["target"], r["target_id"]): r for r in client.get("/api/v1/scope?instance=gl&project=team-a/app").json()}
+    assert rows[("activity", "Version control")]["level"] == "projet" and not rows[("activity", "Version control")]["inherited"]
+    # The Scorecard checks come from the organisation's default decision.
+    assert rows[("check", "scorecard.code_review")]["inherited"] and rows[("check", "scorecard.code_review")]["decision"] == "excluded"
+    assert client.delete("/api/v1/scope/Version control?target=activity&instance=gl&project=team-a/app").status_code == 204
+    assert client.get("/api/v1/projects/gl/team-a/app").json()["statuses"]["Version control"]["status"] == "implemented"

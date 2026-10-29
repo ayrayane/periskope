@@ -16,8 +16,10 @@ from fastapi.responses import JSONResponse
 from periskope_core.catalog import CHECKS
 from periskope_core.diff import diff
 from periskope_core.referential import ACTIVITIES, REFERENTIAL_VERSION
+from periskope_core.scope import ScopeDecision, Target, effective
 from periskope_core.settings import env, queue
 from periskope_db import Viewer, connect, runs
+from periskope_db import scope as scope_db
 from pydantic import BaseModel, Field
 
 from periskope_api.auth import Settings, Verifier, viewer
@@ -280,6 +282,8 @@ async def patch_project(instance: str, path: str, body: ProjectPatch, me: Me) ->
         " reinstated = CASE WHEN $4 THEN true ELSE reinstated END, excluded_reason = CASE WHEN $4 THEN NULL ELSE excluded_reason END"
         " WHERE id = $1", p["id"], changes.get("target_level"), changes.get("sonar_key"), changes.get("enabled"))
     await audit(me, "project.update", f"{instance}:{path}", before={k: p[k] for k in changes}, after=changes)
+    if "target_level" in changes:
+        await scope_db.rescore(state["db"], project_id=p["id"])
     return changes
 
 
@@ -340,12 +344,104 @@ async def activities(me: Me) -> dict:
     return {"version": REFERENTIAL_VERSION, "items": [a.model_dump() for a in ACTIVITIES.values()]}
 
 
+class ScopeItem(BaseModel):
+    target: Literal["check", "activity"]
+    target_id: str = Field(max_length=200)
+    decision: Literal["retained", "excluded"]
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class ScopeRequest(BaseModel):
+    # Neither: the organisation. instance: that instance. Both: that project.
+    instance: str | None = None
+    project: str | None = Field(None, description="GitLab path of the project")
+    items: list[ScopeItem] = Field(min_length=1, max_length=500)
+
+
+async def scope_target(me: Viewer, instance: str | None, project: str | None) -> int | None:
+    """The project id the decision is for, after checking the viewer may decide at that level."""
+    if project is not None:
+        if instance is None:
+            raise HTTPException(422, "un projet se désigne avec son instance")
+        p = await project_row(me, instance, project)
+        if not me.can_maintain(instance, project):
+            raise HTTPException(403, "dérogation réservée aux mainteneurs du projet")
+        return p["id"]
+    if not me.admin:
+        raise HTTPException(403, "le cadrage de l'organisation ou d'une instance est réservé aux admins")
+    if instance and not await state["db"].fetchval("SELECT 1 FROM gitlab_instances WHERE slug = $1", instance):
+        raise HTTPException(404, "instance inconnue")
+    return None
+
+
+async def after_scope_change(instance: str | None, project_id: int | None) -> None:
+    if project_id is not None:
+        await scope_db.rescore(state["db"], project_id=project_id)
+    else:
+        # The whole organisation or an instance: recomputed in the background, the request does not wait.
+        task = asyncio.create_task(scope_db.rescore(state["db"], instance=instance))
+        state.setdefault("tasks", set()).add(task)
+        task.add_done_callback(state["tasks"].discard)
+
+
 @api.get("/scope")
-async def scope(me: Me, instance: str | None = None) -> list[dict]:
-    rows = await state["db"].fetch(
-        "SELECT target, target_id, instance, project_id, decision, reason, author, updated_at FROM scope_decisions"
-        " WHERE instance IS NULL OR instance = $1 ORDER BY target, target_id", instance)
-    return [dict(r) for r in rows]
+async def scope(me: Me, instance: str | None = None, project: str | None = None) -> list[dict]:
+    """The scope in force for every check and activity at that level, and where each decision comes from."""
+    project_id = (await project_row(me, instance, project))["id"] if project and instance else None
+    decisions = await scope_db.decisions_for(state["db"], instance, project_id)
+    rows = {(r["target"], r["target_id"], r["instance"], r["project_id"]): r for r in await state["db"].fetch(
+        "SELECT target, target_id, instance, project_id, author, updated_at FROM scope_decisions")}
+    eff = effective(decisions, instance, project_id)
+    here = "projet" if project_id else "instance" if instance else "organisation"
+    out = []
+    targets = [(Target.CHECK, c.id) for c in CHECKS] + [(Target.ACTIVITY, a) for a in ACTIVITIES]
+    for target, target_id in targets:
+        d = eff.get((target, target_id))
+        level = None if d is None else "projet" if d.project_id else "instance" if d.instance else "organisation"
+        meta = rows.get((target.value, target_id, d.instance, d.project_id)) if d else None
+        out.append({"target": target, "target_id": target_id, "decision": d.decision if d else "retained",
+                    "reason": d.reason if d else None, "level": level or "défaut", "inherited": level not in (None, here),
+                    "author": meta["author"] if meta else None, "updated_at": meta["updated_at"] if meta else None})
+    return out
+
+
+@api.put("/scope")
+async def put_scope(body: ScopeRequest, me: Me) -> dict:
+    """Retain or exclude several targets at once (the bulk decision after filtering)."""
+    project_id = await scope_target(me, body.instance, body.project)
+    known = {("check", c.id) for c in CHECKS} | {("activity", a) for a in ACTIVITIES}
+    if unknown := [i.target_id for i in body.items if (i.target, i.target_id) not in known]:
+        raise HTTPException(422, f"cible inconnue : {', '.join(unknown[:5])}")
+    where = f"{body.instance}:{body.project}" if body.project else body.instance or "organisation"
+    async with state["db"].acquire() as conn, conn.transaction():
+        for i in body.items:
+            d = ScopeDecision(target=i.target, target_id=i.target_id, decision=i.decision, reason=i.reason, instance=body.instance, project_id=project_id)
+            before = await scope_db.put(conn, d, me.username)
+            await conn.execute("INSERT INTO audit_log (actor, action, target, before, after) VALUES ($1, 'scope.put', $2, $3, $4)",
+                               me.username, f"{where}/{i.target}:{i.target_id}", before, i.model_dump())
+    await after_scope_change(body.instance, project_id)
+    return {"updated": len(body.items)}
+
+
+@api.put("/scope/{target_id}")
+async def put_one(target_id: str, body: ScopeItem, me: Me, instance: str | None = None, project: str | None = None) -> dict:
+    if body.target_id != target_id:
+        raise HTTPException(422, "l'identifiant de l'URL et celui du corps diffèrent")
+    return await put_scope(ScopeRequest(instance=instance, project=project, items=[body]), me)
+
+
+@api.delete("/scope/{target_id}", status_code=204)
+async def delete_scope(target_id: str, me: Me, target: Literal["check", "activity"] = "check",
+                       instance: str | None = None, project: str | None = None) -> None:
+    """Withdraw the decision at this level: the inherited one applies again."""
+    project_id = await scope_target(me, instance, project)
+    async with state["db"].acquire() as conn, conn.transaction():
+        before = await scope_db.remove(conn, target, target_id, instance, project_id)
+        if before is None:
+            raise HTTPException(404, "aucune décision à ce niveau")
+        await conn.execute("INSERT INTO audit_log (actor, action, target, before) VALUES ($1, 'scope.delete', $2, $3)",
+                           me.username, f"{project or instance or 'organisation'}/{target}:{target_id}", before)
+    await after_scope_change(instance, project_id)
 
 
 app.include_router(api)

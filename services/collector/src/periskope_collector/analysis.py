@@ -14,9 +14,9 @@ from periskope_checks.registry import Depends
 from periskope_clients.gitlab import GitLab, SourceDown, run_calls
 from periskope_clients.sonar import SonarDown, SonarQube
 from periskope_core.models import CheckStatus
-from periskope_core.scope import ScopeDecision, excluded
+from periskope_core.scope import excluded
 from periskope_core.scoring import score
-from periskope_db import runs
+from periskope_db import runs, scope
 
 log = structlog.get_logger()
 RUN_TIMEOUT_S = 300
@@ -42,12 +42,7 @@ async def sonar_analysis_id(ctx: Context) -> str | None:
 
 
 async def scope_for(db: asyncpg.Pool, instance: str, project_id: int) -> tuple[set[str], set[str]]:
-    rows = await db.fetch(
-        "SELECT target, target_id, decision, reason, instance, project_id FROM scope_decisions"
-        " WHERE instance IS NULL OR (instance = $1 AND (project_id IS NULL OR project_id = $2))",
-        instance, project_id,
-    )
-    return excluded((ScopeDecision(**dict(r)) for r in rows), instance, project_id)
+    return excluded(await scope.decisions_for(db, instance, project_id), instance, project_id)
 
 
 async def analyse(db: asyncpg.Pool, gl: GitLab, run_id: int, *, enterprise: bool, sonar: SonarQube | None = None) -> None:
