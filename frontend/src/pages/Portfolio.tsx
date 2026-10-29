@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ProjectRow } from "../api";
-import { Score, when } from "../components/status";
+import { Score, Skeleton, when } from "../components/status";
 
 type Sort = "name" | "score" | "last_run";
 const FILTERS = [
@@ -82,6 +82,7 @@ export default function Portfolio() {
       </form>
 
       {projects.isError && <p className="error" role="alert">{(projects.error as Error).message}</p>}
+      {projects.isLoading && <Skeleton lines={6} label="Chargement des projets…" />}
       {projects.isSuccess && rows.length === 0 && (
         <p className="empty">Aucun projet dans votre périmètre ne correspond. Vous voyez les projets dont vous êtes membre dans GitLab.</p>
       )}
@@ -115,7 +116,7 @@ export default function Portfolio() {
           </div>
         </div>
       </div>}
-      <p className="page-status" role="status">{projects.isLoading || projects.isFetchingNextPage ? "Chargement…" : ""}</p>
+      <p className="page-status" role="status">{projects.isFetchingNextPage ? "Chargement de la suite…" : ""}</p>
     </section>
   );
 }

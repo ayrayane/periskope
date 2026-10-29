@@ -1,27 +1,45 @@
 // Shared visual vocabulary: score with its coverage, and statuses that never show "unknown" as a failure.
 import type { ActivityStatus, CheckStatus } from "../api";
 
-const CHECK: Record<CheckStatus, { label: string; icon: string }> = {
-  pass: { label: "Validée", icon: "✓" },
-  fail: { label: "Manquante", icon: "✕" },
-  unknown: { label: "Indéterminée", icon: "?" },
-  not_applicable: { label: "Sans objet", icon: "–" },
+type IconName = "check" | "cross" | "question" | "dash" | "half";
+// One stroke icon set (24-unit grid, 2.5 stroke) instead of text glyphs, decorative next to the visible label.
+const PATHS: Record<IconName, string> = {
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  cross: "M6.5 6.5l11 11M17.5 6.5l-11 11",
+  question: "M9.2 9.3a3 3 0 1 1 4.3 2.7c-.9.5-1.5 1.1-1.5 2.1v.4M12 18.2h.01",
+  dash: "M6.5 12h11",
+  half: "M12 4a8 8 0 1 0 0 16zM12 4a8 8 0 1 1 0 16",
 };
 
-const ACTIVITY: Record<ActivityStatus, { label: string; icon: string; tone: CheckStatus }> = {
-  implemented: { label: "En place", icon: "✓", tone: "pass" },
-  partial: { label: "Partielle", icon: "◐", tone: "fail" },
-  not_implemented: { label: "Absente", icon: "✕", tone: "fail" },
-  unknown: { label: "Indéterminée", icon: "?", tone: "unknown" },
-  not_applicable: { label: "Sans objet", icon: "–", tone: "not_applicable" },
-  out_of_scope: { label: "Écartée", icon: "–", tone: "not_applicable" },
+export function Icon({ name }: { name: IconName }) {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+      <path d={PATHS[name]} fill={name === "half" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+const CHECK: Record<CheckStatus, { label: string; icon: IconName }> = {
+  pass: { label: "Validée", icon: "check" },
+  fail: { label: "Manquante", icon: "cross" },
+  unknown: { label: "Indéterminée", icon: "question" },
+  not_applicable: { label: "Sans objet", icon: "dash" },
+};
+
+const ACTIVITY: Record<ActivityStatus, { label: string; icon: IconName; tone: CheckStatus }> = {
+  implemented: { label: "En place", icon: "check", tone: "pass" },
+  partial: { label: "Partielle", icon: "half", tone: "fail" },
+  not_implemented: { label: "Absente", icon: "cross", tone: "fail" },
+  unknown: { label: "Indéterminée", icon: "question", tone: "unknown" },
+  not_applicable: { label: "Sans objet", icon: "dash", tone: "not_applicable" },
+  out_of_scope: { label: "Écartée", icon: "dash", tone: "not_applicable" },
 };
 
 export function CheckBadge({ status }: { status: CheckStatus }) {
   const s = CHECK[status];
   return (
     <span className={`badge tone-${status}`}>
-      <span aria-hidden="true">{s.icon}</span> {s.label}
+      <Icon name={s.icon} /> {s.label}
     </span>
   );
 }
@@ -30,7 +48,7 @@ export function ActivityBadge({ status, toConfirm }: { status: ActivityStatus; t
   const s = ACTIVITY[status];
   return (
     <span className={`badge tone-${s.tone}`}>
-      <span aria-hidden="true">{s.icon}</span> {s.label}
+      <Icon name={s.icon} /> {s.label}
       {toConfirm && <span className="to-confirm"> · à confirmer</span>}
     </span>
   );
@@ -54,6 +72,16 @@ export const RUN_LABEL: Record<string, string> = {
   queued: "En file d'attente", running: "Analyse en cours", succeeded: "Terminée", failed: "Échec", cancelled: "Annulée",
 };
 export const TRIGGER: Record<string, string> = { user: "à la demande", webhook: "push sur la branche", nightly: "revue nocturne" };
+
+/** Placeholder rows while data loads (progressive loading), hidden from assistive tech, which hears the status text. */
+export function Skeleton({ lines = 4, label = "Chargement…" }: { lines?: number; label?: string }) {
+  return (
+    <div className="skeleton" role="status">
+      <span className="sr-only">{label}</span>
+      {Array.from({ length: lines }, (_, i) => <span key={i} className="skeleton-line" aria-hidden="true" style={{ width: `${92 - (i % 3) * 14}%` }} />)}
+    </div>
+  );
+}
 
 export const when = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : "—";

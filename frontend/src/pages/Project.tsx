@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Activity, ActivityStatus, api, ApiError, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run } from "../api";
 import BranchPicker from "../components/BranchPicker";
 import ScoreChart from "../components/ScoreChart";
-import { ActivityBadge, CheckBadge, RUN_LABEL, Score, TRIGGER, when } from "../components/status";
+import { ActivityBadge, CheckBadge, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
 import { ScopeEditor } from "./Scope";
 
 const TABS = [
@@ -61,7 +61,7 @@ export default function Project() {
     const e = project.error as ApiError;
     return <p className="error" role="alert">{e.status === 404 ? "Ce projet n'existe pas ou n'est pas dans votre périmètre." : e.message}</p>;
   }
-  if (!project.data) return <p className="page-status" role="status">Chargement…</p>;
+  if (!project.data) return <Skeleton lines={6} label="Chargement du projet…" />;
   const p = project.data;
   const tabs = TABS.filter(([key]) => key !== "cadrage" || p.can_launch);
   const asked = params.get("vue") as Tab | null;
@@ -212,7 +212,7 @@ function Checks({ results, checks }: { results: Record<string, CheckResult>; che
 function Todo({ url, targetLevel }: { url: string; targetLevel: number }) {
   const items = useQuery({ queryKey: ["roadmap", url], queryFn: () => api<RoadmapItem[]>(`${url}/roadmap`) });
   if (items.isError) return <p className="error" role="alert">{(items.error as Error).message}</p>;
-  if (!items.data) return <p className="page-status" role="status">Chargement…</p>;
+  if (!items.data) return <Skeleton />;
   if (!items.data.length) return <p className="empty">Rien à faire jusqu'au niveau cible {targetLevel}.</p>;
   return (
     <ol className="todo">
@@ -232,7 +232,7 @@ function Todo({ url, targetLevel }: { url: string; targetLevel: number }) {
 function History({ url, defaultBranch }: { url: string; defaultBranch: string | null }) {
   const runs = useQuery({ queryKey: ["runs", url], queryFn: () => api<{ items: Run[] }>(`${url}/runs`) });
   if (runs.isError) return <p className="error" role="alert">{(runs.error as Error).message}</p>;
-  if (!runs.data) return <p className="page-status" role="status">Chargement…</p>;
+  if (!runs.data) return <Skeleton />;
   if (!runs.data.items.length) return <p className="empty">Aucune analyse pour l'instant.</p>;
   return (
     <>

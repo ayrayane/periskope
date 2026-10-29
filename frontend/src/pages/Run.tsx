@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, Check, Diff, RunDetail } from "../api";
-import { CheckBadge, RUN_LABEL as LABEL, Score, when } from "../components/status";
+import { CheckBadge, RUN_LABEL as LABEL, Score, Skeleton, when } from "../components/status";
 
 export default function Run() {
   const { id = "" } = useParams();
@@ -22,7 +22,7 @@ export default function Run() {
   });
   const checks = useQuery({ queryKey: ["checks"], queryFn: () => api<Check[]>("/checks"), staleTime: Infinity });
   if (run.isError) return <p className="error" role="alert">{(run.error as ApiError).status === 404 ? "Analyse introuvable." : (run.error as Error).message}</p>;
-  if (!run.data) return <p className="page-status" role="status">Chargement…</p>;
+  if (!run.data) return <Skeleton lines={6} label="Chargement de l'analyse…" />;
   const r = run.data;
   const reference = r.branch === r.default_branch;
   const done = r.status === "succeeded";
