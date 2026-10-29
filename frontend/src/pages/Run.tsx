@@ -1,0 +1,103 @@
+// One analysis: its results, a banner when it is not the reference branch, and what changed against the reference or the previous run.
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import { api, ApiError, Check, Diff, RunDetail } from "../api";
+import { CheckBadge, Score, when } from "../components/status";
+
+const LABEL = { queued: "En file d'attente", running: "Analyse en cours", succeeded: "Terminée", failed: "Échec", cancelled: "Annulée" };
+
+export default function Run() {
+  const { id = "" } = useParams();
+  const [startedAt] = useState(Date.now());
+  const run = useQuery({
+    queryKey: ["run-detail", id],
+    queryFn: () => api<RunDetail>(`/runs/${id}`),
+    refetchInterval: (q) => (["queued", "running"].includes(q.state.data?.status ?? "") ? (Date.now() - startedAt > 120_000 ? 10_000 : 3_000) : false),
+  });
+  const checks = useQuery({ queryKey: ["checks"], queryFn: () => api<Check[]>("/checks"), staleTime: Infinity });
+  if (run.isError) return <p className="error" role="alert">{(run.error as ApiError).status === 404 ? "Analyse introuvable." : (run.error as Error).message}</p>;
+  if (!run.data) return <p className="page-status" role="status">Chargement…</p>;
+  const r = run.data;
+  const reference = r.branch === r.default_branch;
+  const done = r.status === "succeeded";
+
+  return (
+    <article aria-labelledby="run-title">
+      <nav className="crumbs" aria-label="Fil d'Ariane">
+        <Link to="/">Portefeuille</Link> / <Link to={`/p/${r.instance}/${r.path}`}>{r.path}</Link> / analyse {r.id}
+      </nav>
+      {!reference && (
+        <p className="banner" role="note">
+          Branche <code>{r.branch}</code>, pas la référence du projet (<code>{r.default_branch}</code>) : cette analyse ne change pas la note du projet.
+        </p>
+      )}
+      <header className="project-head">
+        <div>
+          <h1 id="run-title">Analyse de <code>{r.branch}</code></h1>
+          <p className="muted" aria-live="polite">
+            {LABEL[r.status]}{r.finished_at && <> le {when(r.finished_at)}</>}{r.commit_sha && <> sur <code>{r.commit_sha.slice(0, 8)}</code></>}
+            {r.requested_by && <> · lancée par {r.requested_by}</>}{r.error && <> · {r.error}</>}
+          </p>
+        </div>
+        {done && <Score score={r.score} coverage={r.coverage} size="lg" />}
+      </header>
+      {done && (
+        <>
+          <DiffView id={r.id} against={reference ? "previous" : undefined}
+            title={reference ? "Changements depuis l'analyse précédente" : "Comparaison avec la branche de référence"} />
+          <section className="group">
+            <h2>Preuves</h2>
+            <table>
+              <thead><tr><th scope="col">Preuve</th><th scope="col">Statut</th><th scope="col">Constat</th></tr></thead>
+              <tbody>
+                {(checks.data ?? []).filter((c) => r.results?.[c.id]).map((c) => (
+                  <tr key={c.id}>
+                    <td><span className="mono small">{c.id}</span><br />{c.title}</td>
+                    <td><CheckBadge status={r.results![c.id].status} /></td>
+                    <td>{r.results![c.id].message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
+      )}
+    </article>
+  );
+}
+
+function DiffView({ id, against, title }: { id: number; against?: "previous"; title: string }) {
+  const diff = useQuery({
+    queryKey: ["diff", id, against],
+    queryFn: () => api<Diff>(`/runs/${id}/diff${against ? `?against=${against}` : ""}`),
+    retry: false,
+  });
+  if (diff.isError) return <p className="muted">{(diff.error as Error).message}</p>;
+  if (!diff.data) return null;
+  const d = diff.data;
+  const delta = d.after.score != null && d.before.score != null ? Math.round(d.after.score - d.before.score) : null;
+  const rows = (list: Diff["gained"], label: string, tone: string) =>
+    list.length > 0 && (
+      <div className="diff-group">
+        <h3 className={tone}>{label} ({list.length})</h3>
+        <ul>{list.map((x) => <li key={x.check}><span className="mono small">{x.check}</span> — {x.after_message}<span className="muted small"> (avant : {x.before_message})</span></li>)}</ul>
+      </div>
+    );
+  return (
+    <section className="group diff" aria-labelledby={`diff-${id}`}>
+      <h2 id={`diff-${id}`}>{title}</h2>
+      <p className="muted small">
+        Par rapport à l'analyse {d.before.id} sur <code>{d.before.branch}</code> du {when(d.before.finished_at)}
+        {delta != null && <> · score {delta > 0 ? `+${delta}` : delta}</>}
+      </p>
+      {!d.gained.length && !d.lost.length && !d.changed.length ? <p className="muted">Aucun changement.</p> : (
+        <>
+          {rows(d.lost, "Perdues", "lost")}
+          {rows(d.gained, "Gagnées", "gained")}
+          {rows(d.changed, "Autres changements", "")}
+        </>
+      )}
+    </section>
+  );
+}

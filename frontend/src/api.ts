@@ -91,3 +91,59 @@ export interface Activity {
   level: number;
   usefulness: number;
 }
+
+export interface Branch {
+  name: string;
+  default: boolean;
+  protected: boolean;
+  committed_at: string;
+}
+
+export interface RunDetail extends Run {
+  instance: string;
+  path: string;
+  default_branch: string;
+  results: Record<string, CheckResult> | null;
+}
+
+interface DiffRow {
+  check: string;
+  before: CheckStatus;
+  after: CheckStatus;
+  before_message: string;
+  after_message: string;
+}
+
+export interface Diff {
+  before: Pick<Run, "id" | "branch" | "commit_sha" | "finished_at" | "score" | "coverage">;
+  after: Pick<Run, "id" | "branch" | "commit_sha" | "finished_at" | "score" | "coverage">;
+  gained: DiffRow[];
+  lost: DiffRow[];
+  changed: DiffRow[];
+}
+
+export interface RoadmapItem {
+  activity: string;
+  dimension: string;
+  level: number;
+  status: ActivityStatus;
+  blocked_by: string[];
+  steps: { check: string; action: string | null; message: string }[];
+}
+
+export interface ScopeRow {
+  target: "check" | "activity";
+  target_id: string;
+  decision: "retained" | "excluded";
+  reason: string | null;
+  level: "organisation" | "instance" | "projet" | "défaut";
+  inherited: boolean;
+  author: string | null;
+  updated_at: string | null;
+}
+
+export interface Me {
+  sub: string;
+  username: string;
+  admin: boolean;
+}

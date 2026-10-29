@@ -1,15 +1,19 @@
 // Project page: score and coverage first, the launch button for maintainers, then activities, checks, to-do and history.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { Activity, ActivityStatus, api, ApiError, Check, CheckResult, Project as P, projectUrl, Run } from "../api";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { Activity, ActivityStatus, api, ApiError, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run } from "../api";
+import BranchPicker from "../components/BranchPicker";
+import ScoreChart from "../components/ScoreChart";
 import { ActivityBadge, CheckBadge, Score, when } from "../components/status";
+import { ScopeEditor } from "./Scope";
 
 const TABS = [
   ["activities", "Activités"],
   ["checks", "Preuves"],
   ["todo", "À faire"],
   ["history", "Historique"],
+  ["scope", "Cadrage"],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 const RUN_LABEL: Record<Run["status"], string> = {
@@ -21,7 +25,9 @@ export default function Project() {
   const { instance = "", "*": path = "" } = useParams();
   const url = projectUrl(instance, path);
   const client = useQueryClient();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("activities");
+  const [branch, setBranch] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
 
   const project = useQuery({ queryKey: ["project", url], queryFn: () => api<P>(url) });
@@ -43,7 +49,12 @@ export default function Project() {
     },
   });
   const launch = useMutation({
-    mutationFn: () => api<{ id: number }>(`${url}/runs`, { method: "POST", body: "{}", headers: { "Idempotency-Key": crypto.randomUUID() } }),
+    mutationFn: (b: string | null) =>
+      api<{ id: number }>(`${url}/runs`, { method: "POST", body: JSON.stringify(b ? { branch: b } : {}), headers: { "Idempotency-Key": crypto.randomUUID() } }),
+    onSuccess: (r, b) => {
+      // A branch analysis is checked on its own page, next to the comparison with the reference.
+      if (b && b !== project.data?.default_branch) navigate(`/r/${r.id}`);
+    },
     onSettled: () => {
       setStartedAt(Date.now());
       client.invalidateQueries({ queryKey: ["project", url] });
@@ -75,9 +86,13 @@ export default function Project() {
 
       <div className="run-bar" aria-live="polite">
         {p.can_launch && (
-          <button type="button" className="primary" disabled={launch.isPending || !!running} onClick={() => launch.mutate()}>
-            {running ? "Analyse en cours…" : "Lancer une analyse"}
-          </button>
+          <>
+            <BranchPicker url={url} value={branch ?? p.default_branch ?? ""} onChange={setBranch} />
+            <button type="button" className="primary" disabled={launch.isPending || (!!running && (!branch || branch === p.default_branch))}
+              onClick={() => launch.mutate(branch && branch !== p.default_branch ? branch : null)}>
+              {running && (!branch || branch === p.default_branch) ? "Analyse en cours…" : branch && branch !== p.default_branch ? "Analyser la branche" : "Lancer une analyse"}
+            </button>
+          </>
         )}
         {active.data && <span className={`badge ${running ? "tone-unknown" : active.data.status === "failed" ? "tone-fail" : "tone-pass"}`}>{RUN_LABEL[active.data.status]}</span>}
         {launch.error && <span className="error">{(launch.error as Error).message}</span>}
@@ -85,7 +100,7 @@ export default function Project() {
       </div>
 
       <div role="tablist" aria-label="Vues du projet" className="tabs">
-        {TABS.map(([key, label]) => (
+        {TABS.filter(([key]) => key !== "scope" || p.can_launch).map(([key, label]) => (
           <button key={key} role="tab" id={`tab-${key}`} aria-selected={tab === key} aria-controls={`panel-${key}`} tabIndex={tab === key ? 0 : -1}
             onClick={() => setTab(key)}
             onKeyDown={(e) => {
@@ -101,16 +116,18 @@ export default function Project() {
         ))}
       </div>
       <section role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
-        {!p.last_run && tab !== "history" ? (
+        {tab === "scope" ? (
+          <ScopeEditor where={{ instance: p.instance, project: p.path }} canEdit={p.can_launch} />
+        ) : !p.last_run && tab !== "history" ? (
           <p className="empty">Ce projet n'a pas encore été analysé.</p>
         ) : tab === "activities" ? (
           <Activities project={p} checks={checks.data ?? []} activities={activities.data?.items ?? []} />
         ) : tab === "checks" ? (
           <Checks results={results} checks={checks.data ?? []} />
         ) : tab === "todo" ? (
-          <Todo project={p} checks={checks.data ?? []} activities={activities.data?.items ?? []} />
+          <Todo url={url} targetLevel={p.target_level} />
         ) : (
-          <History url={url} />
+          <History url={url} defaultBranch={p.default_branch} />
         )}
       </section>
     </article>
@@ -176,21 +193,18 @@ function Checks({ results, checks }: { results: Record<string, CheckResult>; che
   );
 }
 
-function Todo({ project, checks, activities }: { project: P; checks: Check[]; activities: Activity[] }) {
-  const results = project.last_run?.results ?? {};
-  const missing = activities
-    .filter((a) => a.level <= project.target_level && ["not_implemented", "partial"].includes(project.statuses?.[a.name]?.status ?? ""))
-    .sort((a, b) => a.level - b.level || b.usefulness - a.usefulness);
-  if (!missing.length) return <p className="empty">Rien à faire jusqu'au niveau cible {project.target_level}.</p>;
+function Todo({ url, targetLevel }: { url: string; targetLevel: number }) {
+  const items = useQuery({ queryKey: ["roadmap", url], queryFn: () => api<RoadmapItem[]>(`${url}/roadmap`) });
+  if (!items.data) return <p className="page-status" role="status">Chargement…</p>;
+  if (!items.data.length) return <p className="empty">Rien à faire jusqu'au niveau cible {targetLevel}.</p>;
   return (
     <ol className="todo">
-      {missing.map((a) => (
-        <li key={a.name}>
-          <h2><span lang="en">{a.name}</span> <span className="muted small">niveau {a.level}</span></h2>
+      {items.data.map((a) => (
+        <li key={a.activity}>
+          <h2><span lang="en">{a.activity}</span> <span className="muted small">niveau {a.level}{a.status === "partial" ? " · partielle" : ""}</span></h2>
+          {a.blocked_by.length > 0 && <p className="muted small">Après : <span lang="en">{a.blocked_by.join(", ")}</span></p>}
           <ul>
-            {checks.filter((c) => c.activity === a.name && results[c.id]?.status === "fail").map((c) => (
-              <li key={c.id}><strong>{results[c.id].action}</strong> <span className="muted small">— {results[c.id].message}</span></li>
-            ))}
+            {a.steps.map((s) => <li key={s.check}><strong>{s.action}</strong> <span className="muted small">— {s.message}</span></li>)}
           </ul>
         </li>
       ))}
@@ -198,16 +212,19 @@ function Todo({ project, checks, activities }: { project: P; checks: Check[]; ac
   );
 }
 
-function History({ url }: { url: string }) {
+function History({ url, defaultBranch }: { url: string; defaultBranch: string | null }) {
   const runs = useQuery({ queryKey: ["runs", url], queryFn: () => api<{ items: Run[] }>(`${url}/runs`) });
   if (!runs.data) return <p className="page-status" role="status">Chargement…</p>;
+  const reference = runs.data.items.filter((r) => r.branch === defaultBranch);
   return (
+    <>
+    <ScoreChart runs={reference} />
     <table>
       <thead><tr><th scope="col">Date</th><th scope="col">Déclencheur</th><th scope="col">Branche</th><th scope="col">Statut</th><th scope="col">Score</th></tr></thead>
       <tbody>
         {runs.data.items.map((r) => (
           <tr key={r.id}>
-            <td>{when(r.created_at)}</td>
+            <td><Link to={`/r/${r.id}`}>{when(r.created_at)}</Link></td>
             <td>{{ user: `à la demande (${r.requested_by})`, webhook: "webhook", nightly: "revue nocturne", pipeline: "pipeline" }[r.trigger] ?? r.trigger}</td>
             <td><code>{r.branch}</code></td>
             <td>{RUN_LABEL[r.status]}{r.error && <span className="muted small"> — {r.error}</span>}</td>
@@ -216,5 +233,6 @@ function History({ url }: { url: string }) {
         ))}
       </tbody>
     </table>
+    </>
   );
 }
