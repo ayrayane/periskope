@@ -17,6 +17,7 @@ from periskope_collector.ratelimit import Bucket
 from periskope_collector.sync import memberships, sync_projects
 
 MEMBERSHIP_TTL_S = 900
+BRANCHES_TTL_S = 120
 INSTANCE = env("INSTANCE", "")
 
 
@@ -65,9 +66,18 @@ async def resolve_memberships(ctx: dict[str, Any], sub: str, username: str, emai
     await ctx["redis"].set(f"members:{sub}:{ctx['instance'].slug}", json.dumps(value), ex=MEMBERSHIP_TTL_S)
 
 
+async def list_branches(ctx: dict[str, Any], project_id: int) -> None:
+    """The repository's real branches, for the branch picker and the 422 on an unknown branch."""
+    gitlab_id = await ctx["db"].fetchval("SELECT gitlab_id FROM projects WHERE id = $1", project_id)
+    found = await ctx["gl"].pages(f"/projects/{gitlab_id}/repository/branches", max_pages=5) if gitlab_id else None
+    branches = [{"name": b["name"], "default": b["default"], "protected": b["protected"], "committed_at": b["commit"]["committed_date"]}
+                for b in (found[0] if found else [])]
+    await ctx["redis"].set(f"branches:{project_id}", json.dumps(branches), ex=BRANCHES_TTL_S)
+
+
 class WorkerSettings:
-    # Memberships are queued under a fixed job id; a kept result would block the next resolution once the cache expires.
-    functions = (run_analysis, analyse_project, run_sync, func(resolve_memberships, keep_result=0))
+    # Memberships and branches are queued under fixed job ids; a kept result would block the next refresh once the cache expires.
+    functions = (run_analysis, analyse_project, run_sync, func(resolve_memberships, keep_result=0), func(list_branches, keep_result=0))
     on_startup = startup
     on_shutdown = shutdown
     queue_name = queue(INSTANCE)

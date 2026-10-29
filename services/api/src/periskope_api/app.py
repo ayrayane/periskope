@@ -1,6 +1,7 @@
 """Periskope REST API: reads PostgreSQL only; writes are limited to launches, scope and project settings."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, R
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from periskope_core.catalog import CHECKS
+from periskope_core.diff import diff
 from periskope_core.referential import ACTIVITIES, REFERENTIAL_VERSION
 from periskope_core.settings import env, queue
 from periskope_db import Viewer, connect, runs
@@ -21,6 +23,7 @@ from pydantic import BaseModel, Field
 from periskope_api.auth import Settings, Verifier, viewer
 
 ON_DEMAND_PER_HOUR = 10
+BRANCH_WAIT_S = 3.0
 state: dict[str, Any] = {}
 
 
@@ -176,7 +179,31 @@ class ProjectPatch(BaseModel):
     enabled: bool | None = None
 
 
+async def branches_of(project: dict, fresh: bool = False) -> list[dict] | None:
+    """Branches as the instance's collector last read them (2 min cache); asks it on a miss and waits up to 3 s."""
+    arq, key = state["arq"], f"branches:{project['id']}"
+    if not fresh and (raw := await arq.get(key)) is not None:
+        return json.loads(raw)
+    if fresh:
+        await arq.delete(key)
+    await arq.enqueue_job("list_branches", project["id"], _queue_name=queue(project["instance"]), _job_id=key, _defer_by=timedelta(hours=-1))
+    for _ in range(int(BRANCH_WAIT_S / 0.1)):
+        await asyncio.sleep(0.1)
+        if (raw := await arq.get(key)) is not None:
+            return json.loads(raw)
+    return None
+
+
 # Routes with a suffix come before the bare project route: the GitLab path holds slashes.
+@api.get("/projects/{instance}/{path:path}/branches")
+async def project_branches(instance: str, path: str, me: Me, q: str | None = Query(None, max_length=100)) -> list[dict]:
+    project = await project_row(me, instance, path)
+    found = await branches_of(project)
+    if found is None:
+        raise HTTPException(503, "liste des branches indisponible pour le moment, réessayez")
+    found = [b for b in found if not q or q.lower() in b["name"].lower()]
+    return sorted(found, key=lambda b: (not b["default"], b["name"]))[:100]
+
 @api.post("/projects/{instance}/{path:path}/runs", status_code=202)
 async def launch(instance: str, path: str, body: RunRequest, me: Me, idempotency_key: Annotated[str | None, Header()] = None) -> dict:
     project = await project_row(me, instance, path)
@@ -187,8 +214,12 @@ async def launch(instance: str, path: str, body: RunRequest, me: Me, idempotency
         return json.loads(seen)
     branch = body.branch or project["default_branch"]
     if branch != project["default_branch"]:
-        # Lot 2 brings branch analyses; until then only the reference branch is measured.
-        raise HTTPException(422, "seule la branche par défaut peut être analysée pour l'instant")
+        # The branch must exist in GitLab at launch time: read fresh, never from a stale cache.
+        found = await branches_of(project, fresh=True)
+        if found is None:
+            raise HTTPException(503, "liste des branches indisponible pour le moment, réessayez")
+        if branch not in {b["name"] for b in found}:
+            raise HTTPException(422, f"la branche {branch} n'existe pas dans GitLab")
     count = await arq.incr(f"quota:{me.sub}")
     if count == 1:
         await arq.expire(f"quota:{me.sub}", 3600)
@@ -266,6 +297,24 @@ async def get_run(run_id: int, me: Me) -> dict:
     run = await run_row(me, run_id)
     run["evidence"] = await state["db"].fetchval("SELECT evidence FROM run_evidence WHERE run_id = $1", run["reused_from"] or run_id)
     return run
+
+
+@api.get("/runs/{run_id}/diff")
+async def run_diff(run_id: int, me: Me, against: int | None = None) -> dict:
+    """Changes from `against` (default: the project's reference run) to this run."""
+    run = await run_row(me, run_id)
+    if against is None:
+        against = await state["db"].fetchval("SELECT last_run_id FROM project_state WHERE project_id = $1", run["project_id"])
+        if against is None:
+            raise HTTPException(404, "aucune analyse de référence pour ce projet")
+    base = await run_row(me, against)
+    if base["project_id"] != run["project_id"]:
+        raise HTTPException(422, "les deux analyses doivent porter sur le même projet")
+    return {
+        "before": {k: base[k] for k in ("id", "branch", "commit_sha", "finished_at", "score", "coverage")},
+        "after": {k: run[k] for k in ("id", "branch", "commit_sha", "finished_at", "score", "coverage")},
+        **diff(base["results"] or {}, run["results"] or {}),
+    }
 
 
 @api.delete("/runs/{run_id}", status_code=204)

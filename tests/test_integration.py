@@ -103,14 +103,15 @@ def client(db, database_url, monkeypatch):
 
 
 def test_api_scope_and_launch_rules(client):
-    client.who["v"] = Viewer("s1", "alice", namespaces=frozenset({("gl", "team-a")}))
+    sub = f"s-{uuid.uuid4().hex}"  # the hourly quota lives in Valkey, across test sessions
+    client.who["v"] = Viewer(sub, "alice", namespaces=frozenset({("gl", "team-a")}))
     paths = [p["path"] for p in client.get("/api/v1/projects").json()["items"]]
     assert paths == ["team-a/app", "team-a/sub/lib"]
     hidden = client.get("/api/v1/projects/gl/team-ab/other")
     assert hidden.status_code == 404 and hidden.headers["content-type"] == "application/problem+json"
     assert client.post("/api/v1/projects/gl/team-a/app/runs", json={}).status_code == 403
 
-    client.who["v"] = Viewer("s1", "alice", namespaces=frozenset({("gl", "team-a")}), maintains=frozenset({("gl", "team-a")}))
+    client.who["v"] = Viewer(sub, "alice", namespaces=frozenset({("gl", "team-a")}), maintains=frozenset({("gl", "team-a")}))
     # Valkey outlives a test session: a fresh key, or a cached answer from a previous run comes back.
     key = uuid.uuid4().hex
     first = client.post("/api/v1/projects/gl/team-a/app/runs", json={}, headers={"Idempotency-Key": key})
@@ -118,7 +119,16 @@ def test_api_scope_and_launch_rules(client):
     assert client.post("/api/v1/projects/gl/team-a/app/runs", json={}, headers={"Idempotency-Key": key}).json() == first.json()
     again = client.post("/api/v1/projects/gl/team-a/app/runs", json={})
     assert again.status_code == 409 and again.json()["id"] == first.json()["id"]
-    assert client.post("/api/v1/projects/gl/team-a/app/runs", json={"branch": "feat/x"}).status_code == 422
+    from periskope_api import app as api
+
+    async def branches(project, fresh=False):
+        return [{"name": "main", "default": True, "protected": True, "committed_at": "2026-10-28T10:00:00Z"},
+                {"name": "feat/login", "default": False, "protected": False, "committed_at": "2026-10-28T11:00:00Z"}]
+    api.branches_of = branches
+    assert [b["name"] for b in client.get("/api/v1/projects/gl/team-a/app/branches?q=log").json()] == ["feat/login"]
+    unknown = client.post("/api/v1/projects/gl/team-a/app/runs", json={"branch": "feat/x"})
+    assert unknown.status_code == 422 and "feat/x" in unknown.json()["detail"]
+    assert client.post("/api/v1/projects/gl/team-a/app/runs", json={"branch": "feat/login"}).status_code == 202
     assert client.get(f"/api/v1/runs/{first.json()['id']}").json()["status"] == "queued"
     project = client.get("/api/v1/projects/gl/team-a/app").json()
     assert project["active_run"] == first.json()["id"] and project["can_launch"]
