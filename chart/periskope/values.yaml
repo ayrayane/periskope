@@ -54,6 +54,8 @@ keda:
   enabled: false
   minReplicas: 1
   threshold: 200
+  # Where KEDA runs: its metrics-api scaler reads the queue depth from the scheduler.
+  namespace: keda
 
 postgres:
   instances: 2

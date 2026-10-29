@@ -41,8 +41,12 @@ spec:
   minReplicaCount: {{ $.Values.keda.minReplicas }}
   maxReplicaCount: 2
   triggers:
-    - type: redis
-      metadata: { address: "periskope-valkey:6379", listName: "collect:{{ .slug }}", listLength: {{ $.Values.keda.threshold | quote }}, dataType: zset }
+    # The ARQ queue is a sorted set, which KEDA's redis scaler cannot measure: the scheduler reports its depth.
+    - type: metrics-api
+      metadata:
+        url: http://periskope-scheduler.{{ $.Release.Namespace }}.svc/metrics/queue/{{ .slug }}
+        valueLocation: depth
+        targetValue: {{ $.Values.keda.threshold | quote }}
 ---
 {{- end }}
 {{- if $.Values.crossplane.enabled }}

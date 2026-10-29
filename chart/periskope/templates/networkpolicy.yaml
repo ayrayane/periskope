@@ -14,6 +14,9 @@ spec:
         {{- range $.Values.networkPolicy.hooksFrom }}
         - {{ toJson . }}
         {{- end }}
+        {{- if $.Values.keda.enabled }}
+        - { namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $.Values.keda.namespace }} } } }
+        {{- end }}
         {{- end }}
 ---
 {{- end }}

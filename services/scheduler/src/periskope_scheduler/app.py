@@ -146,6 +146,14 @@ async def rollup_history() -> None:
              dropped_partitions=len(old))
 
 
+@app.get("/metrics/queue/{instance}")
+async def queue_depth(instance: str) -> dict:
+    """Depth of an instance's collector queue, read by KEDA to scale its collectors (in-cluster only, no data exposed)."""
+    if instance not in state["instances"]:
+        raise HTTPException(404)
+    return {"depth": await state["arq"].zcard(queue(instance))}
+
+
 @app.get("/health")
 async def health() -> dict:
     await state["db"].fetchval("SELECT 1")
