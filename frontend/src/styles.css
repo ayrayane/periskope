@@ -95,6 +95,8 @@ th { font-size: 0.85rem; color: var(--muted); }
   .row > :nth-child(3)::before { content: "Dernière réussite : "; color: var(--muted); }
   .row.head > :nth-child(n + 3) { display: none; }
   .row.head > :nth-child(3)::before { content: none; }
+  /* Wrap long project paths on a phone rather than cut them. */
+  .row .name a { white-space: normal; overflow-wrap: anywhere; }
 }
 /* Tables keep their structure on a phone and scroll sideways instead of losing their headers. */
 .table-scroll { overflow-x: auto; }
