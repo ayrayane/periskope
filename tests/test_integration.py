@@ -204,3 +204,16 @@ async def test_dormant_projects_are_spaced_when_the_instance_asks(db):
         await conn.execute("UPDATE projects SET last_activity_at = now() - interval '1 year' WHERE id = $1", project_id)
         assert timedelta(days=29) < await runs.next_due(conn, project_id) - datetime.now(UTC) < timedelta(days=30)
         await conn.execute("UPDATE gitlab_instances SET space_dormant = false")
+
+
+def test_admin_routes(client):
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}))
+    assert client.get("/api/v1/admin/overview").status_code == 404  # not even told the area exists
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
+    overview = client.get("/api/v1/admin/overview").json()
+    assert overview["instances"][0]["slug"] == "gl" and overview["instances"][0]["tracked"] == 4
+    assert client.put("/api/v1/admin/settings", json={"catch_up_at": "25:00"}).status_code == 422
+    assert client.put("/api/v1/admin/settings", json={"catch_up_at": "02:15", "on_demand_per_hour": 5}).json()["catch_up_at"] == "02:15"
+    assert client.get("/api/v1/admin/settings").json()["changed"]["catch_up_at"]["updated_by"] == "root"
+    assert client.get("/api/v1/admin/audit?action=settings").json()["items"][0]["after"] == {"catch_up_at": "02:15", "on_demand_per_hour": 5}
+    client.put("/api/v1/admin/settings", json={"catch_up_at": "01:00", "on_demand_per_hour": 10})

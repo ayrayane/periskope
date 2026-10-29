@@ -14,6 +14,7 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import FastAPI, Header, HTTPException, Request
 from periskope_core.settings import env, instances, queue, secret
 from periskope_db import connect
+from periskope_db import settings as hot
 from periskope_db.bootstrap import bootstrap
 
 log = structlog.get_logger()
@@ -21,8 +22,7 @@ TZ = ZoneInfo(env("TIMEZONE", "Europe/Paris"))
 # Absorbs a burst of pushes: the project is analysed once, 10 minutes after the first event.
 QUIET = timedelta(minutes=10)
 LOCK_KEY, LOCK_TTL_S = "scheduler:lock", 60
-EVIDENCE_DAYS, BRANCH_RUN_DAYS = 14, 30
-TASKS = {"sync_projects": time(0, 30), "catch_up": time(1, 0), "rollup_history": time(5, 0)}
+TASKS = {"sync_projects": "sync_at", "catch_up": "catch_up_at", "rollup_history": "rollup_at"}
 SYSTEM_EVENTS = {"project_create", "project_rename", "project_transfer", "project_destroy"}
 
 state: dict = {}
@@ -96,9 +96,11 @@ async def cron_loop() -> None:
             if held:
                 await redis.expire(LOCK_KEY, LOCK_TTL_S)
                 now = datetime.now(TZ)
-                for task, at in TASKS.items():
+                # Read every loop: an admin's new hours apply without a restart.
+                conf = await hot.load(state["db"])
+                for task, field in TASKS.items():
                     key = f"scheduler:done:{task}:{now.date()}"
-                    if now.time() >= at and await redis.set(key, 1, nx=True, ex=2 * 86400):
+                    if now.time() >= time.fromisoformat(getattr(conf, field)) and await redis.set(key, 1, nx=True, ex=2 * 86400):
                         log.info("task_start", task=task)
                         await globals()[task]()
         except Exception:
@@ -125,6 +127,7 @@ async def catch_up() -> None:
 async def rollup_history() -> None:
     """Monthly points, purge of raw evidence and branch runs, partitions ahead, and the morning report."""
     db = state["db"]
+    conf = await hot.load(db)
     await db.execute(
         "INSERT INTO history_monthly (project_id, month, score, coverage, by_dimension)"
         " SELECT project_id, date_trunc('month', now())::date, score, coverage, by_dimension FROM project_state WHERE last_run_id IS NOT NULL"
@@ -132,13 +135,13 @@ async def rollup_history() -> None:
     await db.execute("SELECT periskope_partitions(current_date, 7)")
     old = await db.fetch(
         "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid JOIN pg_class p ON p.oid = i.inhparent"
-        " WHERE p.relname = 'run_evidence' AND c.relname < 'run_evidence_' || to_char(current_date - $1::int, 'YYYYMMDD')", EVIDENCE_DAYS)
+        " WHERE p.relname = 'run_evidence' AND c.relname < 'run_evidence_' || to_char(current_date - $1::int, 'YYYYMMDD')", conf.evidence_days)
     for r in old:
         await db.execute(f'DROP TABLE "{r["relname"]}"')
     await db.execute(
         "DELETE FROM runs r USING projects p WHERE p.id = r.project_id AND r.branch <> p.default_branch"
         " AND r.created_at < now() - make_interval(days => $1) AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.reused_from = r.id)"
-        " AND NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.run_id = r.id)", BRANCH_RUN_DAYS)
+        " AND NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.run_id = r.id)", conf.branch_run_days)
     report = await db.fetch(
         "SELECT status, count(*) AS n, count(reused_from) AS reused, coalesce(sum(gitlab_calls), 0) AS calls FROM runs"
         " WHERE created_at > now() - interval '1 day' GROUP BY status")

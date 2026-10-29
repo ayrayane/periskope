@@ -120,3 +120,13 @@ th { font-size: 0.85rem; color: var(--muted); }
 .chart .crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart .tooltip { position: absolute; top: 0; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; pointer-events: none; white-space: nowrap; box-shadow: 0 2px 8px rgb(0 0 0 / 0.12); }
 .top a:not(.brand) { color: var(--ink); text-decoration: none; font-weight: 600; }
+
+/* Administration */
+.admin-nav { display: flex; gap: 14px; }
+button.secondary { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 12px; font-weight: 600; }
+button.secondary:hover { border-color: var(--accent); }
+.admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; }
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 14px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+.settings label { display: grid; gap: 4px; }
+.settings input { padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--ink); font: inherit; max-width: 200px; }
+.settings .actions { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; }

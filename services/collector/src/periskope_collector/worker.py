@@ -76,8 +76,8 @@ async def list_branches(ctx: dict[str, Any], project_id: int) -> None:
 
 
 class WorkerSettings:
-    # Memberships and branches are queued under fixed job ids; a kept result would block the next refresh once the cache expires.
-    functions = (run_analysis, analyse_project, run_sync, func(resolve_memberships, keep_result=0), func(list_branches, keep_result=0))
+    # Sync, memberships and branches are queued under fixed job ids; a kept result would block the next refresh once the cache expires.
+    functions = (run_analysis, analyse_project, func(run_sync, keep_result=0), func(resolve_memberships, keep_result=0), func(list_branches, keep_result=0))
     on_startup = startup
     on_shutdown = shutdown
     queue_name = queue(INSTANCE)

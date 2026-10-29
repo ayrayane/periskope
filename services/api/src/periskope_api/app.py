@@ -21,11 +21,12 @@ from periskope_core.scope import ScopeDecision, Target, effective
 from periskope_core.settings import env, queue
 from periskope_db import Viewer, connect, runs
 from periskope_db import scope as scope_db
+from periskope_db import settings as hot
 from pydantic import BaseModel, Field
 
+from periskope_api import admin as admin_routes
 from periskope_api.auth import Settings, Verifier, viewer
 
-ON_DEMAND_PER_HOUR = 10
 BRANCH_WAIT_S = 3.0
 state: dict[str, Any] = {}
 
@@ -226,8 +227,9 @@ async def launch(instance: str, path: str, body: RunRequest, me: Me, idempotency
     count = await arq.incr(f"quota:{me.sub}")
     if count == 1:
         await arq.expire(f"quota:{me.sub}", 3600)
-    if count > ON_DEMAND_PER_HOUR and not me.admin:
-        raise HTTPException(429, f"{ON_DEMAND_PER_HOUR} analyses à la demande par heure au plus")
+    per_hour = (await hot.load(state["db"])).on_demand_per_hour
+    if count > per_hour and not me.admin:
+        raise HTTPException(429, f"{per_hour} analyses à la demande par heure au plus")
     try:
         run_id = await runs.create(state["db"], project["id"], branch, "user", me.username)
     except runs.AlreadyActive as e:
@@ -462,3 +464,4 @@ async def delete_scope(target_id: str, me: Me, target: Literal["check", "activit
 
 
 app.include_router(api)
+app.include_router(admin_routes.router(state, current, audit))

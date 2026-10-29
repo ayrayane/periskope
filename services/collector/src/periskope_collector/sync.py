@@ -65,22 +65,47 @@ def _ts(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
+GUEST = 10
+
+
+def seen(node: dict[str, Any]) -> bool:
+    """Minimal access (5) does not show the group's projects in GitLab, so not in Periskope either."""
+    return ((node.get("accessLevel") or {}).get("integerValue") or 0) >= GUEST
+
+
 MEMBERSHIPS = """
 query($username: String!, $groups: String, $projects: String) {
   user(username: $username) {
-    groupMemberships(first: 100, after: $groups) { pageInfo { hasNextPage endCursor } nodes { group { fullPath } } }
-    projectMemberships(first: 100, after: $projects) { pageInfo { hasNextPage endCursor } nodes { project { fullPath id } } }
+    groupMemberships(first: 100, after: $groups) { pageInfo { hasNextPage endCursor } nodes { accessLevel { integerValue } group { fullPath } } }
+    projectMemberships(first: 100, after: $projects) { pageInfo { hasNextPage endCursor } nodes { accessLevel { integerValue } project { fullPath id } } }
   }
 }
 """
 
 
+async def gitlab_user(gl: GitLab, username: str, email: str | None) -> dict[str, Any] | None:
+    """The GitLab account of a Keycloak user, or None. A same login with another e-mail is another person: never matched.
+    Blocked, deactivated and bot accounts see nothing."""
+    def same_person(u: dict[str, Any]) -> bool:
+        known = u.get("email") or u.get("public_email")
+        return not (email and known) or known.lower() == email.lower()
+
+    found = [u for u in await gl.get("/users", username=username) or [] if u["username"].lower() == username.lower() and same_person(u)]
+    if not found and email:
+        # Login names may differ between Keycloak and GitLab: fall back on the exact e-mail.
+        found = [u for u in await gl.get("/users", search=email) or [] if (u.get("email") or "").lower() == email.lower()]
+    if len(found) != 1:
+        return None
+    user = found[0]
+    return user if user.get("state") == "active" and not user.get("bot") else None
+
+
 async def memberships(gl: GitLab, username: str, email: str | None) -> dict[str, list] | None:
-    """Groups and projects the user belongs to on this instance; None when they have no account there."""
-    if email and not await gl.get("/users", username=username):
-        # Login names may differ between Keycloak and GitLab: fall back on the e-mail.
-        found = await gl.get("/users", search=email)
-        username = found[0]["username"] if found and len(found) == 1 else username
+    """Groups and projects the user belongs to on this instance; None when they have no usable account there."""
+    user = await gitlab_user(gl, username, email)
+    if user is None:
+        return None
+    username = user["username"]
     # A finished connection restarts from its first page while the other continues: sets absorb the repeats.
     groups: set[str] = set()
     projects: dict[str, int] = {}
@@ -91,8 +116,8 @@ async def memberships(gl: GitLab, username: str, email: str | None) -> dict[str,
         if user is None:
             return None
         g, p = user["groupMemberships"], user["projectMemberships"]
-        groups.update(n["group"]["fullPath"] for n in g["nodes"] if n.get("group"))
-        projects.update((n["project"]["fullPath"], int(n["project"]["id"].rsplit("/", 1)[-1])) for n in p["nodes"] if n.get("project"))
+        groups.update(n["group"]["fullPath"] for n in g["nodes"] if n.get("group") and seen(n))
+        projects.update((n["project"]["fullPath"], int(n["project"]["id"].rsplit("/", 1)[-1])) for n in p["nodes"] if n.get("project") and seen(n))
         cursors = {"groups": g["pageInfo"]["endCursor"] if g["pageInfo"]["hasNextPage"] else None,
                    "projects": p["pageInfo"]["endCursor"] if p["pageInfo"]["hasNextPage"] else None}
         if not any(cursors.values()):
