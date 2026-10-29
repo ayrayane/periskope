@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from arq.connections import RedisSettings
+from arq.worker import func
 from periskope_clients.gitlab import GitLab
 from periskope_core.settings import env, instances, queue, secret
 from periskope_db import connect, runs
@@ -61,7 +62,8 @@ async def resolve_memberships(ctx: dict[str, Any], sub: str, username: str, emai
 
 
 class WorkerSettings:
-    functions = (run_analysis, analyse_project, run_sync, resolve_memberships)
+    # Memberships are queued under a fixed job id; a kept result would block the next resolution once the cache expires.
+    functions = (run_analysis, analyse_project, run_sync, func(resolve_memberships, keep_result=0))
     on_startup = startup
     on_shutdown = shutdown
     queue_name = queue(INSTANCE)
