@@ -7,7 +7,14 @@ metadata: { name: {{ . }} }
 spec:
   podSelector: { matchLabels: { app: {{ . }} } }
   policyTypes: [Ingress]
-  ingress: [{ from: [{{ toJson $.Values.networkPolicy.ingressFrom }}] }]
+  ingress:
+    - from:
+        - {{ toJson $.Values.networkPolicy.ingressFrom }}
+        {{- if eq . "periskope-scheduler" }}
+        {{- range $.Values.networkPolicy.hooksFrom }}
+        - {{ toJson . }}
+        {{- end }}
+        {{- end }}
 ---
 {{- end }}
 apiVersion: networking.k8s.io/v1

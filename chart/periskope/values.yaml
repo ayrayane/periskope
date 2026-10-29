@@ -78,3 +78,5 @@ networkPolicy:
   # Pods allowed to reach the API, frontend and webhook receiver: the ingress controller.
   ingressFrom:
     namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+  # Extra peers allowed to post webhooks straight to the scheduler service, e.g. a GitLab running in the same cluster.
+  hooksFrom: []
