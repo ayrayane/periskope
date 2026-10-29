@@ -12,11 +12,12 @@ async def bootstrap(db: asyncpg.Pool, instances: dict[str, Instance]) -> None:
         # Serialise concurrent starts of several services.
         await conn.execute("SELECT pg_advisory_xact_lock(4711)")
         await conn.executemany(
-            """INSERT INTO gitlab_instances (slug, name, url, rate_per_min, sonar_url, enterprise, enabled, tracked_namespaces, excluded_namespaces)
-               VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8)
+            """INSERT INTO gitlab_instances (slug, name, url, rate_per_min, sonar_url, enterprise, enabled, tracked_namespaces, excluded_namespaces, space_dormant)
+               VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9)
                ON CONFLICT (slug) DO UPDATE SET name = $2, url = $3, rate_per_min = $4, sonar_url = $5, enterprise = $6, enabled = true,
-                 tracked_namespaces = $7, excluded_namespaces = $8""",
-            [(i.slug, i.name, i.url, i.rate_per_min, i.sonar_url, i.enterprise, i.tracked_namespaces, i.excluded_namespaces) for i in instances.values()],
+                 tracked_namespaces = $7, excluded_namespaces = $8, space_dormant = $9""",
+            [(i.slug, i.name, i.url, i.rate_per_min, i.sonar_url, i.enterprise, i.tracked_namespaces, i.excluded_namespaces, i.space_dormant)
+             for i in instances.values()],
         )
         await conn.execute("UPDATE gitlab_instances SET enabled = false WHERE NOT (slug = ANY($1::text[]))", list(instances))
         await conn.executemany(

@@ -5,6 +5,7 @@ instances: []
 #    url: https://gitlab.example.com
 #    ratePerMin: 600
 #    enterprise: true              # false on CE: Ultimate-only checks report unknown
+#    spaceDormant: false           # true: idle projects re-analysed weekly (7 days) or monthly (6 months), not nightly
 #    sonarUrl: https://sonar.example.com
 #    sonarTokenSecret: sonar-token-gl-prod  # key "token": a user token able to browse the projects
 #    trackedNamespaces: [platform]

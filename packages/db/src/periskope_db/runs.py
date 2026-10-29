@@ -84,9 +84,24 @@ async def succeed(
             " SELECT p.id, $2, $3, $4, now(), NULL, $5, $6, $7, $8 FROM projects p WHERE p.id = $1 AND p.default_branch = $9"
             " ON CONFLICT (project_id) DO UPDATE SET score = $2, coverage = $3, last_run_id = $4, last_success_at = now(), last_error = NULL,"
             " next_due_at = $5, fingerprint = $6, by_dimension = $7, statuses = $8",
-            run["project_id"], score, coverage, run_id, datetime.now(UTC) + timedelta(days=1), f"{commit_sha}:{settings_hash}",
+            run["project_id"], score, coverage, run_id, await next_due(conn, run["project_id"]), f"{commit_sha}:{settings_hash}",
             by_dimension, statuses, run["branch"],
         )
+
+
+async def next_due(conn: asyncpg.Connection, project_id: int) -> datetime:
+    """Tomorrow, unless the instance spaces out dormant projects: weekly after 7 idle days, monthly after 6 months.
+    Never more than 30 days: open MRs and vulnerabilities age even without a commit."""
+    row = await conn.fetchrow(
+        "SELECT i.space_dormant, p.last_activity_at FROM projects p JOIN gitlab_instances i ON i.slug = p.instance WHERE p.id = $1", project_id)
+    now = datetime.now(UTC)
+    idle = now - row["last_activity_at"] if row and row["last_activity_at"] else timedelta(0)
+    if not row or not row["space_dormant"] or idle < timedelta(days=7):
+        days = 1
+    else:
+        days = 30 if idle > timedelta(days=182) else 7
+    # A little early, so tomorrow night's catch-up (01:00) includes a project analysed at 01:30 tonight.
+    return now + timedelta(days=days) - timedelta(hours=2)
 
 
 async def fail(db: asyncpg.Pool, run_id: int, error: str) -> None:

@@ -190,3 +190,17 @@ def test_scope_api(client, db, tmp_path):
     assert rows[("check", "scorecard.code_review")]["inherited"] and rows[("check", "scorecard.code_review")]["decision"] == "excluded"
     assert client.delete("/api/v1/scope/Version control?target=activity&instance=gl&project=team-a/app").status_code == 204
     assert client.get("/api/v1/projects/gl/team-a/app").json()["statuses"]["Version control"]["status"] == "implemented"
+
+
+async def test_dormant_projects_are_spaced_when_the_instance_asks(db):
+    from datetime import UTC, datetime, timedelta
+
+    project_id = await db.fetchval("SELECT id FROM projects WHERE gitlab_id = 7")
+    async with db.acquire() as conn:
+        assert await runs.next_due(conn, project_id) - datetime.now(UTC) < timedelta(days=1)
+        await conn.execute("UPDATE gitlab_instances SET space_dormant = true")
+        await conn.execute("UPDATE projects SET last_activity_at = now() - interval '20 days' WHERE id = $1", project_id)
+        assert timedelta(days=6) < await runs.next_due(conn, project_id) - datetime.now(UTC) < timedelta(days=7)
+        await conn.execute("UPDATE projects SET last_activity_at = now() - interval '1 year' WHERE id = $1", project_id)
+        assert timedelta(days=29) < await runs.next_due(conn, project_id) - datetime.now(UTC) < timedelta(days=30)
+        await conn.execute("UPDATE gitlab_instances SET space_dormant = false")

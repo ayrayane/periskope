@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from periskope_core.catalog import CHECKS
 from periskope_core.diff import diff
 from periskope_core.referential import ACTIVITIES, REFERENTIAL_VERSION
+from periskope_core.roadmap import roadmap
 from periskope_core.scope import ScopeDecision, Target, effective
 from periskope_core.settings import env, queue
 from periskope_db import Viewer, connect, runs
@@ -240,6 +241,16 @@ async def launch(instance: str, path: str, body: RunRequest, me: Me, idempotency
     return result
 
 
+@api.get("/projects/{instance}/{path:path}/roadmap")
+async def project_roadmap(instance: str, path: str, me: Me) -> list[dict]:
+    """Retained activities not in place up to the target level, with the step to take for each failing check."""
+    p = await project_row(me, instance, path)
+    if not p["last_run_id"]:
+        return []
+    results = await state["db"].fetchval("SELECT results FROM runs WHERE id = $1", p["last_run_id"])
+    return roadmap(p["statuses"] or {}, results or {}, p["target_level"])
+
+
 @api.get("/projects/{instance}/{path:path}/runs")
 async def project_runs(instance: str, path: str, me: Me, branch: str | None = None, status: str | None = None,
                        cursor: int | None = None, limit: int = Query(50, ge=1, le=200)) -> dict:
@@ -305,10 +316,16 @@ async def get_run(run_id: int, me: Me) -> dict:
 
 
 @api.get("/runs/{run_id}/diff")
-async def run_diff(run_id: int, me: Me, against: int | None = None) -> dict:
-    """Changes from `against` (default: the project's reference run) to this run."""
+async def run_diff(run_id: int, me: Me, against: int | Literal["previous"] | None = None) -> dict:
+    """Changes from `against` to this run: a run id, "previous" (the run before it on its branch) or, by default, the reference run."""
     run = await run_row(me, run_id)
-    if against is None:
+    if against == "previous":
+        against = await state["db"].fetchval(
+            "SELECT id FROM runs WHERE project_id = $1 AND branch = $2 AND status = 'succeeded' AND id < $3 ORDER BY id DESC LIMIT 1",
+            run["project_id"], run["branch"], run_id)
+        if against is None:
+            raise HTTPException(404, "pas d'analyse précédente sur cette branche")
+    elif against is None:
         against = await state["db"].fetchval("SELECT last_run_id FROM project_state WHERE project_id = $1", run["project_id"])
         if against is None:
             raise HTTPException(404, "aucune analyse de référence pour ce projet")

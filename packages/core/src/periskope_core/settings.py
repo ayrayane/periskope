@@ -18,6 +18,8 @@ class Instance(BaseModel):
     enterprise: bool = True
     tracked_namespaces: list[str] = []
     excluded_namespaces: list[str] = []
+    # Space out dormant projects instead of re-analysing every project every night (an instance short on quota).
+    space_dormant: bool = False
     # Private CA bundle to trust, or None for the system store.
     ca_file: str | None = None
 
