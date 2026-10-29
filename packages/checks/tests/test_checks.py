@@ -78,6 +78,17 @@ def no_suites(d):
     p(d)["pipelines"]["nodes"][0]["testReportSummary"] = {"total": {"count": 0}, "testSuites": {"nodes": []}}
 
 
+def measure(metric, value):
+    def apply(d):
+        ms = d["sonar"]["measures"]["component"]["measures"]
+        d["sonar"]["measures"]["component"]["measures"] = [m for m in ms if m["metric"] != metric] + ([{"metric": metric, "value": value}] if value is not None else [])
+    return apply
+
+
+def no_sonar_project(d):
+    d["sonar"] = {}
+
+
 # check id → (how to make it fail, how to make it unknown)
 CASES = {
     "gitlab.version_control": (set_(("project", "repository", "empty"), True), no_project),
@@ -121,6 +132,13 @@ CASES = {
     "repo.precommit_security": (blob(".pre-commit-config.yaml", "repos:\n- repo: https://github.com/psf/black\n"), no_tree),
     "repo.gitignore": (drop_paths(".gitignore"), no_tree),
     "repo.precommit_lint": (drop_paths(".pre-commit-config.yaml"), no_tree),
+    "sonar.false_positive": (lambda d: (set_(("sonar", "treated", "total"), 0)(d), measure("security_hotspots_reviewed", "0")(d)), no_sonar_project),
+    "sonar.security_gate": (set_(("sonar", "gate_detail", "conditions"), [{"metric": "coverage", "op": "LT", "error": "80"}]), no_sonar_project),
+    "sonar.hotspots_reviewed": (measure("security_hotspots_reviewed", "40.0"), no_sonar_project),
+    "sonar.metrics": (measure("vulnerabilities", None), no_sonar_project),
+    "sonar.recent_analysis": (set_(("sonar", "analyses", "analyses", 0, "date"), "2026-06-01T00:00:00+0000"), no_sonar_project),
+    "sonar.all_components": (measure("ncloc", "0"), no_sonar_project),
+    "sonar.duplication": (measure("duplicated_lines_density", "12.5"), no_sonar_project),
 }
 
 
@@ -138,6 +156,13 @@ async def test_good_project_stays_under_call_budget(tmp_path):
     await run_all(ctx)
     # GraphQL project + blobs, approvals, tokens, CI lint, tree: the spec's target is 5 on average, 15 at worst.
     assert ctx.gl.calls <= 6
+
+
+async def test_sonar_absent_is_unknown_never_fail(tmp_path):
+    ids = [i for i in REGISTRY if i.startswith("sonar.")]
+    outcomes = await run_all(context(good(), tmp_path, sonar=False), ids)
+    assert {o.status for o in outcomes.values()} == {CheckStatus.UNKNOWN}
+    assert "non configuré" in outcomes["sonar.metrics"].message
 
 
 @pytest.mark.parametrize("check_id", sorted(CASES))

@@ -12,6 +12,7 @@ from periskope_checks import REGISTRY, run_all
 from periskope_checks.context import Context
 from periskope_checks.registry import Depends
 from periskope_clients.gitlab import GitLab, SourceDown, run_calls
+from periskope_clients.sonar import SonarDown, SonarQube
 from periskope_core.models import CheckStatus
 from periskope_core.scope import ScopeDecision, excluded
 from periskope_core.scoring import score
@@ -29,6 +30,17 @@ def settings_hash(project: dict[str, Any], approvals: Any, tokens: Any) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
+async def sonar_analysis_id(ctx: Context) -> str | None:
+    """The key of the project's latest SonarQube analysis, when SonarQube answers; it is the SonarQube checks' fingerprint."""
+    if ctx.sonar is None or not ctx.sonar_key:
+        return None
+    try:
+        analysis = await ctx.sonar_analysis()
+    except SonarDown:
+        return None
+    return (analysis or {}).get("key")
+
+
 async def scope_for(db: asyncpg.Pool, instance: str, project_id: int) -> tuple[set[str], set[str]]:
     rows = await db.fetch(
         "SELECT target, target_id, decision, reason, instance, project_id FROM scope_decisions"
@@ -38,7 +50,7 @@ async def scope_for(db: asyncpg.Pool, instance: str, project_id: int) -> tuple[s
     return excluded((ScopeDecision(**dict(r)) for r in rows), instance, project_id)
 
 
-async def analyse(db: asyncpg.Pool, gl: GitLab, run_id: int, *, enterprise: bool) -> None:
+async def analyse(db: asyncpg.Pool, gl: GitLab, run_id: int, *, enterprise: bool, sonar: SonarQube | None = None) -> None:
     run = await runs.claim(db, run_id)
     if run is None:
         return
@@ -47,7 +59,7 @@ async def analyse(db: asyncpg.Pool, gl: GitLab, run_id: int, *, enterprise: bool
     run_calls.set(calls)
     try:
         async with asyncio.timeout(RUN_TIMEOUT_S):
-            await _analyse(db, gl, run, enterprise, calls, bound)
+            await _analyse(db, gl, run, enterprise, sonar, calls, bound)
     except SourceDown as e:
         bound.warning("run_failed", error=str(e))
         await runs.fail(db, run_id, str(e))
@@ -59,8 +71,8 @@ async def analyse(db: asyncpg.Pool, gl: GitLab, run_id: int, *, enterprise: bool
         raise
 
 
-async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise: bool, calls: list[int], log: Any) -> None:
-    ctx = Context(gl, run["path"], run["gitlab_id"], run["branch"], sha="", enterprise=enterprise)
+async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise: bool, sonar: SonarQube | None, calls: list[int], log: Any) -> None:
+    ctx = Context(gl, run["path"], run["gitlab_id"], run["branch"], sha="", enterprise=enterprise, sonar=sonar, sonar_key=run["sonar_key"])
     project = await ctx.project()
     if project is None:
         raise SourceDown("projet introuvable ou illisible avec le jeton de service")
@@ -71,7 +83,12 @@ async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise
     ctx.sha = commit
 
     prior = await runs.reusable(db, run["project_id"], commit)
-    reused_ids = {i for i, r in REGISTRY.items() if r.depends_on == Depends.COMMIT} if prior else set()
+    reuse = {i: prior for i, r in REGISTRY.items() if r.depends_on == Depends.COMMIT} if prior else {}
+    sonar_id = await sonar_analysis_id(ctx)
+    if sonar_id and (prior_sonar := await runs.reusable_sonar(db, run["project_id"], sonar_id)):
+        # Same SonarQube analysis as a previous run: its SonarQube checks stand.
+        reuse |= {i: prior_sonar for i, r in REGISTRY.items() if r.depends_on == Depends.SONAR}
+    reused_ids = {i for i, source in reuse.items() if i in source["results"]}
     outcomes = await run_all(ctx, [i for i in REGISTRY if i not in reused_ids])
     approvals, tokens = await ctx.approvals(), await ctx.access_tokens()
     s_hash = settings_hash(project, approvals, tokens)
@@ -82,14 +99,15 @@ async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise
         for i, o in outcomes.items()
     }
     for i in reused_ids:
-        results[i] = {**prior["results"][i], "reused": True}
+        results[i] = {**reuse[i]["results"][i], "reused": True}
     excluded_checks, excluded_activities = await scope_for(db, run["instance"], run["project_id"])
     s = score({i: CheckStatus(r["status"]) for i, r in results.items()}, target_level=run["target_level"],
               excluded_checks=excluded_checks, excluded_activities=excluded_activities)
     same = prior is not None and await db.fetchval(
-        "SELECT run_id FROM fingerprints WHERE project_id = $1 AND commit_sha = $2 AND settings_hash = $3", run["project_id"], commit, s_hash)
+        "SELECT run_id FROM fingerprints WHERE project_id = $1 AND commit_sha = $2 AND settings_hash = $3 AND sonar_analysis_id IS NOT DISTINCT FROM $4",
+        run["project_id"], commit, s_hash, sonar_id)
     await runs.succeed(
-        db, run["id"], commit_sha=commit, settings_hash=s_hash, results=results,
+        db, run["id"], commit_sha=commit, settings_hash=s_hash, sonar_analysis_id=sonar_id, results=results,
         evidence={i: o.evidence for i, o in outcomes.items() if o.evidence},
         score=s.score, coverage=s.coverage, by_dimension=s.by_dimension,
         statuses={a.activity: {"status": a.status, "to_confirm": a.to_confirm} for a in s.activities},

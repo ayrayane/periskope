@@ -15,6 +15,7 @@
           "ratePerMin": { "type": "integer", "minimum": 1 },
           "enterprise": { "type": "boolean" },
           "sonarUrl": { "type": "string" },
+          "sonarTokenSecret": { "type": "string" },
           "trackedNamespaces": { "type": "array", "items": { "type": "string" } },
           "excludedNamespaces": { "type": "array", "items": { "type": "string" } },
           "tokenSecret": { "type": "string" },

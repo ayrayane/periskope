@@ -52,15 +52,17 @@ async def test_run_lifecycle_and_reuse(db, tmp_path):
     with pytest.raises(runs.AlreadyActive):
         await runs.create(db, project_id, "main", "user", "bob")
     ctx = context(good(), tmp_path)
-    await analyse(db, ctx.gl, first, enterprise=True)
+    await analyse(db, ctx.gl, first, enterprise=True, sonar=ctx.sonar)
     state = await db.fetchrow("SELECT score, coverage, last_run_id, last_error FROM project_state WHERE project_id = $1", project_id)
     assert state["last_run_id"] == first and state["score"] == 100 and state["last_error"] is None
     assert await db.fetchval("SELECT count(*) FROM run_evidence WHERE run_id = $1", first) == 1
 
     second = await runs.create(db, project_id, "main", "nightly", None)
     calls = ctx.gl.calls
-    await analyse(db, ctx.gl, second, enterprise=True)
-    row = await db.fetchrow("SELECT status, reused_from, gitlab_calls FROM runs WHERE id = $1", second)
+    await analyse(db, ctx.gl, second, enterprise=True, sonar=ctx.sonar)
+    row = await db.fetchrow("SELECT status, reused_from, gitlab_calls, results FROM runs WHERE id = $1", second)
+    # The same SonarQube analysis: its checks are taken over too.
+    assert row["results"]["sonar.metrics"].get("reused") and row["results"]["repo.gitignore"].get("reused")
     # Same commit and settings: commit checks reused, no copy of the evidence, fewer calls.
     assert row["status"] == "succeeded" and row["reused_from"] == first
     assert await db.fetchval("SELECT count(*) FROM run_evidence WHERE run_id = $1", second) == 0

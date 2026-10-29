@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 from periskope_checks.context import Context
 from periskope_clients.gitlab import GitLab
+from periskope_clients.sonar import SonarQube
 
 NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
 
@@ -54,6 +55,15 @@ def good() -> dict[str, Any]:
         "tree": [{"path": p, "type": "blob"} for p in (
             ".gitignore", ".pre-commit-config.yaml", "SECURITY.md", "CODEOWNERS", "Dockerfile", "pyproject.toml", "uv.lock",
             "tests/test_auth.py", "tests/integration/test_access_control.py", "src/app.py")],
+        "sonar": {
+            "measures": {"component": {"measures": [
+                {"metric": "ncloc", "value": "12000"}, {"metric": "vulnerabilities", "value": "2"}, {"metric": "security_hotspots", "value": "4"},
+                {"metric": "security_hotspots_reviewed", "value": "100.0"}, {"metric": "duplicated_lines_density", "value": "2.1"}]}},
+            "analyses": {"analyses": [{"key": "AY-1", "date": "2026-10-27T01:20:00+0000"}]},
+            "gate": {"qualityGate": {"name": "Plateforme"}},
+            "gate_detail": {"conditions": [{"metric": "new_security_rating", "op": "GT", "error": "1"}]},
+            "treated": {"total": 3},
+        },
         "blobs": {
             "SECURITY.md": "Security fixes are released within 30 days.",
             "CODEOWNERS": "[Security]\n/auth/ @appsec-team",
@@ -81,8 +91,20 @@ def transport(data: dict[str, Any]) -> httpx.MockTransport:
     return httpx.MockTransport(handle)
 
 
-def context(data: dict[str, Any], tmp: Path, enterprise: bool = True) -> Context:
+def sonar_transport(data: dict[str, Any]) -> httpx.MockTransport:
+    routes = {"/api/measures/component": "measures", "/api/project_analyses/search": "analyses", "/api/qualitygates/get_by_project": "gate",
+              "/api/qualitygates/show": "gate_detail", "/api/issues/search": "treated"}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = (data.get("sonar") or {}).get(routes.get(request.url.path, ""))
+        return httpx.Response(404, json={"errors": [{"msg": "not found"}]}) if body is None else httpx.Response(200, json=body)
+    return httpx.MockTransport(handle)
+
+
+def context(data: dict[str, Any], tmp: Path, enterprise: bool = True, sonar: bool = True) -> Context:
     token = tmp / "token"
     token.write_text("glpat-test")
-    gl = GitLab("https://gitlab.test", token, transport=transport(copy.deepcopy(data)))
-    return Context(gl, "team/app", 7, "main", "abc123", enterprise=enterprise, now=NOW)
+    data = copy.deepcopy(data)
+    gl = GitLab("https://gitlab.test", token, transport=transport(data))
+    sq = SonarQube("https://sonar.test", token, transport=sonar_transport(data)) if sonar else None
+    return Context(gl, "team/app", 7, "main", "abc123", enterprise=enterprise, sonar=sq, sonar_key="team_app", now=NOW)

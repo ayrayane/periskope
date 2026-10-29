@@ -7,6 +7,7 @@ from typing import Any
 from arq.connections import RedisSettings
 from arq.worker import func
 from periskope_clients.gitlab import GitLab
+from periskope_clients.sonar import SonarQube
 from periskope_core.settings import env, instances, queue, secret
 from periskope_db import connect, runs
 from periskope_db.bootstrap import bootstrap
@@ -27,15 +28,18 @@ async def startup(ctx: dict[str, Any]) -> None:
     await bootstrap(ctx["db"], registry)
     bucket = Bucket(ctx["redis"], instance.slug, instance.rate_per_min)
     ctx["gl"] = GitLab(instance.url, secret(f"gitlab-token-{instance.slug}") / "token", acquire=bucket.acquire, verify=instance.ca_file or True)
+    ctx["sonar"] = SonarQube(instance.sonar_url, secret(f"sonar-token-{instance.slug}") / "token", verify=instance.ca_file or True) if instance.sonar_url else None
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
     await ctx["gl"].aclose()
+    if ctx["sonar"]:
+        await ctx["sonar"].aclose()
     await ctx["db"].close()
 
 
 async def run_analysis(ctx: dict[str, Any], run_id: int) -> None:
-    await analyse(ctx["db"], ctx["gl"], run_id, enterprise=ctx["instance"].enterprise)
+    await analyse(ctx["db"], ctx["gl"], run_id, enterprise=ctx["instance"].enterprise, sonar=ctx["sonar"])
 
 
 async def analyse_project(ctx: dict[str, Any], project_id: int, trigger: str) -> int | None:

@@ -22,9 +22,15 @@ spec:
             {{- include "periskope.mounts" $ | nindent 12 }}
             # A file, not a variable: a rotated token is re-read without a restart.
             - { name: token, mountPath: /var/run/secrets/periskope/gitlab-token-{{ .slug }}, readOnly: true }
+            {{- if .sonarUrl }}
+            - { name: sonar, mountPath: /var/run/secrets/periskope/sonar-token-{{ .slug }}, readOnly: true }
+            {{- end }}
       volumes:
         {{- include "periskope.volumes" $ | nindent 8 }}
         - { name: token, secret: { secretName: {{ include "periskope.tokenSecret" (dict "root" $ "i" .) }} } }
+        {{- if .sonarUrl }}
+        - { name: sonar, secret: { secretName: {{ .sonarTokenSecret | default (printf "sonar-token-%s" .slug) }} } }
+        {{- end }}
 ---
 {{- if $.Values.keda.enabled }}
 apiVersion: keda.sh/v1alpha1

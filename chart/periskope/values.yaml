@@ -6,6 +6,7 @@ instances: []
 #    ratePerMin: 600
 #    enterprise: true              # false on CE: Ultimate-only checks report unknown
 #    sonarUrl: https://sonar.example.com
+#    sonarTokenSecret: sonar-token-gl-prod  # key "token": a user token able to browse the projects
 #    trackedNamespaces: [platform]
 #    excludedNamespaces: [platform/sandbox]
 #    # Without Crossplane: existing Secrets holding key "token" (read_api + read_repository, admin-wide read).

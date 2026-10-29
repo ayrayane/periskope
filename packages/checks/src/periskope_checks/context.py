@@ -10,10 +10,12 @@ from typing import Any, TypeVar
 
 import yaml
 from periskope_clients.gitlab import GitLab
+from periskope_clients.sonar import SonarQube
 
 T = TypeVar("T")
 MAX_FILE_BYTES = 512 * 1024
 MAX_FILES = 30
+SONAR_METRICS = "ncloc,vulnerabilities,security_hotspots,security_hotspots_reviewed,duplicated_lines_density"
 # The files repository checks read: security docs, Dockerfiles, CODEOWNERS, pre-commit config.
 READ_FILES = r"(^|/)(SECURITY|PATCH[_-]?POLICY|security[_-]policy)(\.md|\.rst|\.txt)?$|(^|/)(Docker|Container)file[^/]*$|^(\.gitlab/|docs/)?CODEOWNERS$|^\.pre-commit-config\.yaml$"
 LIVE_DAYS = 90
@@ -92,8 +94,10 @@ def strip_disabled(ci: dict[str, Any]) -> dict[str, Any]:
 
 
 class Context:
-    def __init__(self, gl: GitLab, path: str, project_id: int, branch: str, sha: str, *, enterprise: bool = True, now: datetime | None = None):
+    def __init__(self, gl: GitLab, path: str, project_id: int, branch: str, sha: str, *, enterprise: bool = True,
+                 sonar: SonarQube | None = None, sonar_key: str | None = None, now: datetime | None = None):
         self.gl, self.path, self.project_id, self.branch, self.sha, self.enterprise = gl, path, project_id, branch, sha, enterprise
+        self.sonar, self.sonar_key = sonar, sonar_key
         self.now = now or datetime.now(UTC)
         self._cache: dict[str, asyncio.Future[Any]] = {}
 
@@ -158,6 +162,36 @@ class Context:
             return None
         rx = re.compile(pattern, re.IGNORECASE)
         return [p for p in tree[0] if rx.search(p)]
+
+    # SonarQube of the instance, when it has one and the project has a key.
+    @once
+    async def sonar_measures(self) -> dict[str, float] | None:
+        data = await self.sonar.get("/measures/component", component=self.sonar_key, metricKeys=SONAR_METRICS)
+        if data is None:
+            return None
+        return {m["metric"]: float(m["value"]) for m in data["component"].get("measures", []) if "value" in m}
+
+    @once
+    async def sonar_analysis(self) -> dict[str, Any] | None:
+        """The latest analysis {key, date}; {} when never analysed, None when the project is absent from SonarQube."""
+        data = await self.sonar.get("/project_analyses/search", project=self.sonar_key, ps=1)
+        if data is None:
+            return None
+        return (data.get("analyses") or [{}])[0]
+
+    @once
+    async def sonar_gate(self) -> list[dict[str, Any]] | None:
+        gate = await self.sonar.get("/qualitygates/get_by_project", project=self.sonar_key)
+        if gate is None:
+            return None
+        detail = await self.sonar.get("/qualitygates/show", name=gate["qualityGate"]["name"])
+        return None if detail is None else detail.get("conditions", [])
+
+    @once
+    async def sonar_treated(self) -> int | None:
+        """Issues marked false positive or accepted: proof that findings are triaged."""
+        data = await self.sonar.get("/issues/search", componentKeys=self.sonar_key, resolutions="FALSE-POSITIVE,WONTFIX", ps=1)
+        return None if data is None else int(data.get("total", data.get("paging", {}).get("total", 0)))
 
     # Shortcuts over the main query.
     async def default_rule(self) -> dict[str, Any] | None:

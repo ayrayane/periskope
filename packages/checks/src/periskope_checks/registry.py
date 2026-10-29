@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from periskope_clients.gitlab import SourceDown
+from periskope_clients.sonar import SonarDown
 from periskope_core.catalog import CHECKS
 from periskope_core.models import Check, Outcome
 
@@ -53,6 +54,8 @@ async def run_one(reg: Registered, ctx: Context) -> Outcome:
         return await reg.fn(ctx)
     except SourceDown:
         raise
+    except SonarDown as e:
+        return Outcome.unknown(str(e))
     except Exception as e:  # noqa: BLE001
         return Outcome.unknown(f"erreur interne de la preuve : {type(e).__name__}")
 

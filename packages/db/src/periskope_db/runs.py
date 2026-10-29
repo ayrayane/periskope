@@ -33,7 +33,7 @@ async def claim(db: asyncpg.Pool, run_id: int) -> asyncpg.Record | None:
     return await db.fetchrow(
         "UPDATE runs r SET status = 'running', started_at = now() FROM projects p"
         " WHERE r.id = $1 AND r.status = 'queued' AND p.id = r.project_id"
-        " RETURNING r.id, r.branch, r.project_id, p.instance, p.gitlab_id, p.path, p.default_branch, p.target_level",
+        " RETURNING r.id, r.branch, r.project_id, p.instance, p.gitlab_id, p.path, p.default_branch, p.target_level, p.sonar_key",
         run_id,
     )
 
@@ -47,8 +47,17 @@ async def reusable(db: asyncpg.Pool, project_id: int, commit_sha: str) -> dict[s
     return dict(row) if row else None
 
 
+async def reusable_sonar(db: asyncpg.Pool, project_id: int, sonar_analysis_id: str) -> dict[str, Any] | None:
+    """Results of the latest run that saw this SonarQube analysis, for the SonarQube checks."""
+    row = await db.fetchrow(
+        "SELECT run_id, results FROM fingerprints WHERE project_id = $1 AND sonar_analysis_id = $2 ORDER BY created_at DESC LIMIT 1",
+        project_id, sonar_analysis_id,
+    )
+    return dict(row) if row else None
+
+
 async def succeed(
-    db: asyncpg.Pool, run_id: int, *, commit_sha: str, settings_hash: str, results: dict[str, Any], evidence: dict[str, Any],
+    db: asyncpg.Pool, run_id: int, *, commit_sha: str, settings_hash: str, sonar_analysis_id: str | None, results: dict[str, Any], evidence: dict[str, Any],
     score: float | None, coverage: float, by_dimension: dict[str, Any], statuses: dict[str, Any], reused_from: int | None,
     gitlab_calls: int, fingerprint_reused: bool,
 ) -> None:
@@ -64,9 +73,10 @@ async def succeed(
         if not fingerprint_reused:
             await conn.execute("INSERT INTO run_evidence (run_id, evidence) VALUES ($1, $2)", run_id, evidence)
             await conn.execute(
-                "INSERT INTO fingerprints (project_id, commit_sha, settings_hash, run_id, results) VALUES ($1, $2, $3, $4, $5)"
-                " ON CONFLICT (project_id, commit_sha, settings_hash) DO UPDATE SET run_id = excluded.run_id, results = excluded.results, created_at = now()",
-                run["project_id"], commit_sha, settings_hash, run_id, results,
+                "INSERT INTO fingerprints (project_id, commit_sha, settings_hash, sonar_analysis_id, run_id, results) VALUES ($1, $2, $3, $4, $5, $6)"
+                " ON CONFLICT (project_id, commit_sha, settings_hash) DO UPDATE SET run_id = excluded.run_id, results = excluded.results,"
+                " sonar_analysis_id = excluded.sonar_analysis_id, created_at = now()",
+                run["project_id"], commit_sha, settings_hash, sonar_analysis_id, run_id, results,
             )
         # Only the default branch is the project's reference.
         await conn.execute(
