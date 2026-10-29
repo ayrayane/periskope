@@ -1,6 +1,7 @@
 """Scope filter, run lifecycle and API rules against a real PostgreSQL (and Valkey for the API)."""
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -110,9 +111,11 @@ def test_api_scope_and_launch_rules(client):
     assert client.post("/api/v1/projects/gl/team-a/app/runs", json={}).status_code == 403
 
     client.who["v"] = Viewer("s1", "alice", namespaces=frozenset({("gl", "team-a")}), maintains=frozenset({("gl", "team-a")}))
-    first = client.post("/api/v1/projects/gl/team-a/app/runs", json={}, headers={"Idempotency-Key": "k1"})
+    # Valkey outlives a test session: a fresh key, or a cached answer from a previous run comes back.
+    key = uuid.uuid4().hex
+    first = client.post("/api/v1/projects/gl/team-a/app/runs", json={}, headers={"Idempotency-Key": key})
     assert first.status_code == 202
-    assert client.post("/api/v1/projects/gl/team-a/app/runs", json={}, headers={"Idempotency-Key": "k1"}).json() == first.json()
+    assert client.post("/api/v1/projects/gl/team-a/app/runs", json={}, headers={"Idempotency-Key": key}).json() == first.json()
     again = client.post("/api/v1/projects/gl/team-a/app/runs", json={})
     assert again.status_code == 409 and again.json()["id"] == first.json()["id"]
     assert client.post("/api/v1/projects/gl/team-a/app/runs", json={"branch": "feat/x"}).status_code == 422
