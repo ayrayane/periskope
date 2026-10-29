@@ -259,7 +259,8 @@ async def project(instance: str, path: str, me: Me) -> dict:
         p["last_run"] = dict(await state["db"].fetchrow(
             "SELECT id, commit_sha, finished_at, results, reused_from FROM runs WHERE id = $1", p["last_run_id"]))
     p["active_run"] = await state["db"].fetchval(
-        "SELECT id FROM runs WHERE project_id = $1 AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1", p["id"])
+        "SELECT id FROM runs WHERE project_id = $1 AND branch = $2 AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1",
+        p["id"], p["default_branch"])
     return p
 
 
