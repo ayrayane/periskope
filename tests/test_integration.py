@@ -22,7 +22,8 @@ async def db(database_url):
     await bootstrap(pool, {"gl": INSTANCE})
     await pool.execute("TRUNCATE projects, runs, project_state, fingerprints, run_evidence CASCADE")
     await pool.executemany(
-        "INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch) VALUES ('gl', $1, $2, $3, 'group', 'main')",
+        "INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch, sonar_key)"
+        " VALUES ('gl', $1, $2, $3, 'group', 'main', replace($2, '/', '_'))",
         PROJECTS)
     yield pool
     await pool.close()
