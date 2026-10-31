@@ -78,6 +78,9 @@ async def current(authorization: Annotated[str | None, Header()] = None) -> View
     if hit and hit[0] > time.monotonic():
         return hit[1]
     v = await viewer(state["db"], state["arq"], state["verifier"], claims)
+    # An empty scope may only mean memberships were still resolving (slow collector): recompute it rather than hold it a minute.
+    if not (v.admin or v.namespaces or v.projects):
+        return v
     if len(cache) > 10_000:
         cache.clear()
     cache[key] = (time.monotonic() + VIEWER_TTL_S, v)
