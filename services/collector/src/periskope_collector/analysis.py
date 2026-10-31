@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 import asyncpg
+import periskope_checks
 import structlog
 from periskope_checks import REGISTRY, run_all
 from periskope_checks.context import Context
@@ -20,6 +22,18 @@ from periskope_db import runs, scope
 
 log = structlog.get_logger()
 RUN_TIMEOUT_S = 300
+def engine_version() -> str:
+    """Fingerprint of the check engine's source: a result computed by other code is never reused."""
+    root = Path(periskope_checks.__file__).parent
+    digest = hashlib.sha256()
+    for f in sorted(root.glob("*.py")):
+        digest.update(f.name.encode() + f.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+ENGINE_VERSION = engine_version()
+
+
 # Live data ages without a commit; it is left out of the settings fingerprint.
 LIVE_KEYS = {"mergeRequests", "pipelines", "vulnerabilities", "lastActivityAt", "repository"}
 
@@ -83,14 +97,14 @@ async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise
     if sonar_id and (prior_sonar := await runs.reusable_sonar(db, run["project_id"], sonar_id)):
         # Same SonarQube analysis as a previous run: its SonarQube checks stand.
         reuse |= {i: prior_sonar for i, r in REGISTRY.items() if r.depends_on == Depends.SONAR}
-    reused_ids = {i for i, source in reuse.items() if i in source["results"]}
+    reused_ids = {i for i, source in reuse.items() if source["results"].get(i, {}).get("engine") == ENGINE_VERSION}
     outcomes = await run_all(ctx, [i for i in REGISTRY if i not in reused_ids])
     approvals, tokens = await ctx.approvals(), await ctx.access_tokens()
     s_hash = settings_hash(project, approvals, tokens)
 
     # The step to take travels with the result: the API never imports the checks.
     results: dict[str, Any] = {
-        i: {"status": o.status, "message": o.message, **({"action": REGISTRY[i].action} if o.status != CheckStatus.PASS else {})}
+        i: {"status": o.status, "message": o.message, "engine": ENGINE_VERSION, **({"action": REGISTRY[i].action} if o.status != CheckStatus.PASS else {})}
         for i, o in outcomes.items()
     }
     for i in reused_ids:

@@ -72,6 +72,17 @@ async def test_run_lifecycle_and_reuse(db, tmp_path):
     assert await db.fetchval("SELECT count(*) FROM run_evidence WHERE run_id = $1", second) == 0
     assert row["gitlab_calls"] == ctx.gl.calls - calls <= 3
 
+    # Seen on the lab: a fixed check must not keep its stale result because the commit did not move.
+    from periskope_collector import analysis
+    analysis.ENGINE_VERSION = "another-engine"
+    try:
+        third = await runs.create(db, project_id, "main", "nightly", None)
+        await analyse(db, ctx.gl, third, enterprise=True, sonar=ctx.sonar)
+        results = await db.fetchval("SELECT results FROM runs WHERE id = $1", third)
+        assert not results["repo.gitignore"].get("reused") and results["repo.gitignore"]["engine"] == "another-engine"
+    finally:
+        analysis.ENGINE_VERSION = analysis.engine_version()
+
 
 async def test_failed_source_keeps_last_score(db, tmp_path):
     from periskope_collector.analysis import analyse
@@ -185,6 +196,9 @@ def test_scope_api(client, db, tmp_path):
         run = await runs.create(pool, project_id, "main", "user", "alice")
         ctx = context(good(), tmp_path)
         await analyse(pool, ctx.gl, run, enterprise=True, sonar=ctx.sonar)
+        # An older, better analysis: the project now counts as declining over 30 days.
+        await pool.execute("INSERT INTO runs (project_id, branch, trigger, status, score, created_at, referential_version)"
+                           " VALUES ($1, 'main', 'nightly', 'succeeded', 100, now() - interval '40 days', '5.0.2')", project_id)
         await pool.close()
     asyncio.run(analysed())
 
@@ -205,6 +219,25 @@ def test_scope_api(client, db, tmp_path):
     summary = client.get("/api/v1/projects/summary").json()
     assert "Version control" not in [g["activity"] for g in summary["gaps"]]
     assert [r["path"] for r in summary["lowest"]] and all(g["level"] <= 3 for g in summary["gaps"])
+
+    heat = client.get("/api/v1/groups/heatmap?instance=gl&namespace=team-a").json()
+    assert heat["dimensions"] and {r["key"] for r in heat["rows"]} <= {"", "sub"} and heat["rows"][0]["cells"]
+    assert [r["key"] for r in client.get("/api/v1/groups/heatmap").json()["rows"]] == ["gl"]
+    async def dropped():
+        pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
+        await pool.execute("UPDATE project_state SET score = 60 WHERE project_id = (SELECT id FROM projects WHERE gitlab_id = 7)")
+        await pool.close()
+    asyncio.run(dropped())
+    trend = client.get("/api/v1/projects/trend?instance=gl").json()
+    assert [d["path"] for d in trend["declining"]] == ["team-a/app"] and trend["declining"][0]["before"] == 100
+    assert client.get("/api/v1/projects/trend?instance=gl&days=60").json()["declining"] == []
+    flat = client.get("/api/v1/projects/export.csv?instance=gl").text.lstrip("\ufeff").splitlines()
+    assert flat[0].startswith("instance;groupe;projet") and {line.split(";")[2] for line in flat[1:]} == {"team-a/app", "team-a/sub/lib"}
+    detail = client.get("/api/v1/projects/export.csv?instance=gl&detail=true")
+    assert "attachment" in detail.headers["content-disposition"] and "Version control" in detail.text
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "nobody")
+    assert client.get("/api/v1/projects/export.csv").text.lstrip("\ufeff").count("\n") == 1  # header only
+    assert client.get("/api/v1/groups/heatmap").json()["rows"] == [] and client.get("/api/v1/projects/trend").json()["declining"] == []
 
 
 async def test_dormant_projects_are_spaced_when_the_instance_asks(db):
@@ -232,3 +265,77 @@ def test_admin_routes(client):
     assert client.get("/api/v1/admin/settings").json()["changed"]["catch_up_at"]["updated_by"] == "root"
     assert client.get("/api/v1/admin/audit?action=settings").json()["items"][0]["after"] == {"catch_up_at": "02:15", "on_demand_per_hour": 5}
     client.put("/api/v1/admin/settings", json={"catch_up_at": "01:00", "on_demand_per_hour": 10})
+
+
+def test_score_drop_alert_is_posted_once(database_url, tmp_path, monkeypatch):
+    import asyncio
+
+    import httpx
+    import respx
+    from periskope_scheduler import app as scheduler
+
+    (tmp_path / "periskope-alerts").mkdir()
+    (tmp_path / "periskope-alerts" / "url").write_text("https://chat.example.org/hooks/abc\n")
+    monkeypatch.setenv("PERISKOPE_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("PERISKOPE_PUBLIC_URL", "https://periskope.example.org")
+
+    class Keys:
+        def __init__(self):
+            self.seen = set()
+
+        async def set(self, key, value, nx=False, ex=None):
+            if nx and key in self.seen:
+                return None
+            self.seen.add(key)
+            return True
+
+        async def delete(self, key):
+            self.seen.discard(key)
+
+    async def scenario():
+        pool = await connect(database_url)
+        await bootstrap(pool, {"gl": INSTANCE})
+        pid = await pool.fetchval("INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch)"
+                                  " VALUES ('gl', 9901, 'team-z/api', 'team-z', 'group', 'main') RETURNING id")
+        for score, ago in ((90, "2 days"), (70, "1 hour")):
+            await pool.execute("INSERT INTO runs (project_id, branch, trigger, status, score, created_at, finished_at, referential_version)"
+                               f" VALUES ($1, 'main', 'nightly', 'succeeded', $2, now() - interval '{ago}', now() - interval '{ago}', '5.0.2')", pid, score)
+        scheduler.state.update(db=pool, arq=Keys())
+        with respx.mock:
+            route = respx.post("https://chat.example.org/hooks/abc").mock(return_value=httpx.Response(200))
+            await scheduler.alerts()
+            await scheduler.alerts()  # already sent: not posted again
+        await pool.close()
+        return route
+
+    route = asyncio.run(scenario())
+    assert route.call_count == 1
+    body = route.calls[0].request.content.decode()
+    assert "team-z/api" in body and "90" in body and "70" in body and "https://periskope.example.org/p/gl/team-z/api" in body
+
+
+def test_scheduler_metrics(database_url):
+    import asyncio
+
+    from periskope_scheduler import app as scheduler
+
+    class Redis:
+        async def zcard(self, key):
+            return 3 if key == "collect:gl" else 0
+
+        async def get(self, key):
+            return b"1700000000" if key == "webhook:last:gl" else None
+
+    async def scrape():
+        pool = await connect(database_url)
+        await bootstrap(pool, {"gl": INSTANCE})
+        scheduler.state.update(db=pool, arq=Redis(), instances={"gl": INSTANCE})
+        text = await scheduler.metrics()
+        await pool.close()
+        return text
+
+    text = asyncio.run(scrape())
+    assert 'periskope_queue_depth{instance="gl"} 3' in text
+    assert 'periskope_last_webhook_age_seconds{instance="gl"}' in text
+    for name in ("periskope_failed_ratio_last_hour", "periskope_reused_ratio_last_day", "periskope_runs_last_hour", "periskope_overdue_projects"):
+        assert f"# TYPE {name} gauge" in text
