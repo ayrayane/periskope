@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { lazy, StrictMode, Suspense, useEffect } from "react";
+import { lazy, StrictMode, Suspense, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/plus-jakarta-sans";
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
@@ -10,8 +10,10 @@ import Project from "./pages/Project";
 import Run from "./pages/Run";
 import ScopePage from "./pages/Scope";
 
+
 // The admin screen is for a few people: loaded only when opened.
 const Admin = lazy(() => import("./pages/Admin"));
+const Report = lazy(() => import("./pages/Report"));
 import "./styles.css";
 
 const queries = new QueryClient({
@@ -23,11 +25,14 @@ function Shell() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me"), staleTime: 60_000 });
   const { pathname } = useLocation();
   // After a navigation, focus and the tab title follow the new page's heading, for keyboard and screen-reader users.
+  const firstPage = useRef(true);
   useEffect(() => {
     const id = setTimeout(() => {
       const h1 = document.querySelector<HTMLElement>("main h1");
       document.title = h1?.textContent ? `${h1.textContent} · Periskope` : "Periskope";
-      if (h1 && document.activeElement !== h1 && !document.activeElement?.closest("main")) h1.focus();
+      // Not on the first page: keyboard users start from the skip link, the menu and the GitLab panel.
+      if (!firstPage.current && h1 && document.activeElement !== h1 && !document.activeElement?.closest("main")) h1.focus();
+      firstPage.current = false;
     }, 300);
     return () => clearTimeout(id);
   }, [pathname]);
@@ -53,6 +58,7 @@ function Shell() {
           <Route path="/r/:id" element={<Run />} />
           <Route path="/cadrage" element={<ScopePage />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/rapport" element={<Report />} />
           <Route path="*" element={<p className="empty">Page introuvable.</p>} />
         </Routes>
         </Suspense>

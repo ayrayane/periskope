@@ -107,6 +107,7 @@ const FIELDS: { key: string; label: string; type: "time" | "number"; help: strin
   { key: "on_demand_per_hour", label: "Analyses à la demande par utilisateur et par heure", type: "number", help: "1 à 1000", max: 1000 },
   { key: "evidence_days", label: "Conservation des preuves brutes (jours)", type: "number", help: "1 à 90", max: 90 },
   { key: "branch_run_days", label: "Conservation des analyses de branche (jours)", type: "number", help: "1 à 365", max: 365 },
+  { key: "alert_drop", label: "Alerte si le score baisse d'au moins (points)", type: "number", help: "1 à 100 ; envoi au webhook d'alerte s'il est configuré", max: 100 },
 ];
 
 function SettingsForm() {

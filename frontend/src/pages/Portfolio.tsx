@@ -6,6 +6,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ProjectRow, Summary } from "../api";
 import GroupNav, { ScopeCrumbs, useScopeData } from "../components/GroupNav";
 import { Help } from "../components/Help";
+import { ExportBar, HeatmapCard, TrendCard } from "../components/Pilot";
 import Radar from "../components/Radar";
 import { Score, Skeleton, when } from "../components/status";
 
@@ -162,8 +163,11 @@ export default function Portfolio() {
             )}
           </section>
           <Distribution s={s} />
+          <TrendCard instance={instance} namespace={namespace} />
+          <div className="heat-area"><HeatmapCard instance={instance} namespace={namespace} instances={instances} /></div>
         </div>
       )}
+      <ExportBar instance={instance} namespace={namespace} />
       <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="search">
           <span className="sr-only">Rechercher un projet</span>

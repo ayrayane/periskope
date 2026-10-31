@@ -24,6 +24,24 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
+/** Saves an API file (CSV) through the authenticated fetch: a plain link would not carry the token. */
+export async function download(path: string): Promise<void> {
+  const user = await (await userManager()).getUser();
+  const res = await fetch(`/api/v1${path}`, { headers: user ? { Authorization: `Bearer ${user.access_token}` } : {} });
+  if (!res.ok) throw new ApiError(res.status, `Erreur ${res.status}`);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? "periskope.csv";
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export interface Trend {
+  months: { month: string; score: number; projects: number }[];
+  declining: { instance: string; path: string; score: number; before: number; since: string }[];
+}
+export interface Heatmap { dimensions: string[]; rows: { key: string; projects: number; cells: Record<string, number> }[] }
+
 // GitLab paths keep their slashes: each segment is encoded on its own.
 export const projectUrl = (instance: string, path: string) => `/projects/${encodeURIComponent(instance)}/${path.split("/").map(encodeURIComponent).join("/")}`;
 
