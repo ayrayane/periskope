@@ -3,6 +3,12 @@ stages: [test, build, publish]
 
 variables:
   UV_CACHE_DIR: .uv-cache
+  TRIVY_IMAGE: aquasec/trivy:0.58.1
+
+# Periskope checks these on every project it scores, so its own CI carries them too.
+include:
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Jobs/SAST.gitlab-ci.yml
 
 # The lab node is short on I/O: a pod that fails to start or a dropped kubelet connection is retried, a failing test is not.
 default:
@@ -26,9 +32,15 @@ python:
     - uv sync --frozen
     - uv run ruff check .
     - uv run lint-imports
-    - uv run pytest -q --junitxml=report.xml
+    # The spec's quality bar: at least 70 % of the check engine covered by tests.
+    - uv run pytest -q --junitxml=report.xml --cov=periskope_checks --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=70
+  coverage: '/^TOTAL.*\s(\d+)%$/'
   cache: { key: uv, paths: [.uv-cache] }
-  artifacts: { reports: { junit: report.xml }, when: always }
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report: { coverage_format: cobertura, path: coverage.xml }
 
 frontend:
   stage: test
@@ -36,6 +48,17 @@ frontend:
   rules: [{ changes: [frontend/**/*] }, { if: $CI_COMMIT_TAG }]
   script:
     - cd frontend && npm ci && npm run typecheck && npm test && npm run build
+    - npm audit --omit=dev --audit-level=high
+
+sbom:
+  stage: test
+  image: { name: $TRIVY_IMAGE, entrypoint: [""] }
+  rules: [{ if: $CI_COMMIT_TAG }, { if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH }, { if: $CI_PIPELINE_SOURCE == "merge_request_event" }]
+  script:
+    - trivy fs --format cyclonedx --output gl-sbom-periskope.cdx.json .
+    # Shipped dependencies only (dev tooling never reaches the images); fixable criticals and highs block.
+    - trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 .
+  artifacts: { reports: { cyclonedx: gl-sbom-periskope.cdx.json } }
 
 chart:lint:
   stage: test
@@ -84,6 +107,18 @@ image:frontend:
   rules: [{ if: $CI_COMMIT_TAG }, { if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH, changes: [frontend/**/*] }]
   script:
     - /kaniko/executor --context "$CI_PROJECT_DIR/frontend" --dockerfile "$CI_PROJECT_DIR/frontend/Dockerfile" $CERT --destination "$CI_REGISTRY_IMAGE/frontend:$TAG"
+
+image:scan:
+  stage: publish
+  image: { name: $TRIVY_IMAGE, entrypoint: [""] }
+  rules: [{ if: $CI_COMMIT_TAG }]
+  variables: { TRIVY_USERNAME: $CI_REGISTRY_USER, TRIVY_PASSWORD: $CI_REGISTRY_PASSWORD }
+  script:
+    - TAG="${CI_COMMIT_TAG#v}"
+    - if [ -n "$CI_SERVER_TLS_CA_FILE" ]; then export SSL_CERT_FILE="$CI_SERVER_TLS_CA_FILE"; fi
+    - for img in "$CI_REGISTRY_IMAGE:$TAG" "$CI_REGISTRY_IMAGE/frontend:$TAG"; do
+        trivy image --scanners vuln,secret --severity CRITICAL --ignore-unfixed --exit-code 1 "$img" || exit 1;
+      done
 
 chart:publish:
   stage: publish

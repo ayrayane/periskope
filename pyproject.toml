@@ -13,7 +13,7 @@ periskope-scheduler = { workspace = true }
 periskope-collector = { workspace = true }
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "import-linter>=2.1", "ruff>=0.8", "respx>=0.21"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "import-linter>=2.1", "ruff>=0.8", "respx>=0.21", "pytest-cov>=6.0"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
