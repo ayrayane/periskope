@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import csv
+import io
 import json
+import re
 import time
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -14,7 +17,7 @@ from arq.connections import RedisSettings
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from periskope_core.catalog import CHECKS, FIXES
 from periskope_core.diff import diff
 from periskope_core.referential import ACTIVITIES, REFERENTIAL_VERSION
@@ -246,6 +249,105 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
         f" WHERE {where} AND s.score IS NOT NULL ORDER BY s.score, p.path LIMIT 3", *params)
     return {**dict(row), "dimensions": {d["dimension"]: d["score"] for d in dims},
             "gaps": [dict(g) for g in gaps], "lowest": [dict(r) for r in lowest]}
+
+
+@api.get("/projects/trend")
+async def projects_trend(me: Me, instance: str | None = None, namespace: str | None = None,
+                         days: int = Query(30, ge=1, le=365), drop: float = Query(5, ge=0, le=100)) -> dict:
+    """Monthly average score of the scope, and the projects whose score fell by more than `drop` points over `days` days."""
+    where, params = scoped(me, instance, namespace)
+    months = await state["db"].fetch(
+        "SELECT h.month, avg(h.score) AS score, count(*) AS projects FROM history_monthly h JOIN projects p ON p.id = h.project_id"
+        f" WHERE {where} AND h.score IS NOT NULL AND h.month > now() - interval '12 months' GROUP BY h.month ORDER BY h.month", *params)
+    n = len(params)
+    declining = await state["db"].fetch(
+        "SELECT p.instance, p.path, s.score, b.score AS before, b.created_at AS since FROM projects p JOIN project_state s ON s.project_id = p.id"
+        " JOIN LATERAL (SELECT r.score, r.created_at FROM runs r WHERE r.project_id = p.id AND r.branch = p.default_branch"
+        f" AND r.status = 'succeeded' AND r.score IS NOT NULL AND r.created_at < now() - make_interval(days => ${n + 1}::int)"
+        " ORDER BY r.created_at DESC LIMIT 1) b ON true"
+        f" WHERE {where} AND s.score < b.score - ${n + 2}::real ORDER BY s.score - b.score, p.path LIMIT 10", *params, days, drop)
+    return {"months": [dict(m) for m in months], "declining": [dict(d) for d in declining]}
+
+
+@api.get("/groups/heatmap")
+async def groups_heatmap(me: Me, instance: str | None = None, namespace: str | None = None) -> dict:
+    """Average score per DSOMM dimension for each child of the scope: instances, then top groups, then subgroups."""
+    where, params = scoped(me, instance, namespace)
+    if namespace:
+        params.append(namespace)
+        ns = f"${len(params)}"
+        key = f"CASE WHEN p.namespace_path = {ns} THEN '' ELSE split_part(substr(p.namespace_path, length({ns}) + 2), '/', 1) END"
+    else:
+        key = "split_part(p.namespace_path, '/', 1)" if instance else "p.instance"
+    rows = await state["db"].fetch(
+        f"SELECT {key} AS key, d.key AS dimension, avg(d.value::text::float) AS score, count(DISTINCT p.id) AS projects"
+        " FROM projects p JOIN project_state s ON s.project_id = p.id, jsonb_each(s.by_dimension) d"
+        f" WHERE {where} AND jsonb_typeof(d.value) = 'number' GROUP BY 1, 2 ORDER BY 1, 2", *params)
+    out: dict[str, dict] = {}
+    for r in rows:
+        row = out.setdefault(r["key"], {"key": r["key"], "projects": 0, "cells": {}})
+        row["cells"][r["dimension"]] = r["score"]
+        row["projects"] = max(row["projects"], r["projects"])
+    return {"dimensions": sorted({r["dimension"] for r in rows}), "rows": list(out.values())}
+
+
+STATUS_FR = {"implemented": "en place", "partial": "partielle", "not_implemented": "absente", "unknown": "indéterminée",
+             "not_applicable": "sans objet", "out_of_scope": "écartée"}
+
+
+def cell(value: Any) -> str:
+    """CSV cell safe to open in a spreadsheet: no formula injection from GitLab-controlled text."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+@api.get("/projects/export.csv")
+async def export_csv(me: Me, instance: str | None = None, namespace: str | None = None, detail: bool = False) -> StreamingResponse:
+    """The scope as a spreadsheet: one row per project, or with detail one row per project and practice with its evidence."""
+    where, params = scoped(me, instance, namespace)
+    rows = await state["db"].fetch(
+        "SELECT p.instance, p.namespace_path, p.path, p.target_level, s.score, s.coverage, s.last_success_at, s.last_error, s.statuses, r.results"
+        " FROM projects p LEFT JOIN project_state s ON s.project_id = p.id LEFT JOIN runs r ON r.id = s.last_run_id"
+        f" WHERE {where} ORDER BY p.instance, p.path", *params)
+    by_activity: dict[str, list] = {}
+    for c in CHECKS:
+        by_activity.setdefault(c.activity, []).append(c)
+
+    def lines():
+        buf = io.StringIO()
+        w = csv.writer(buf, delimiter=";")
+        buf.write("\ufeff")  # Excel reads UTF-8 only with a BOM
+        if detail:
+            w.writerow(["instance", "groupe", "projet", "dimension", "pratique", "niveau", "dans la cible", "statut", "preuves"])
+        else:
+            w.writerow(["instance", "groupe", "projet", "niveau cible", "score", "couverture", "derniere reussite", "en echec",
+                        "en place", "partielles", "absentes", "indeterminees"])
+        yield buf.getvalue()
+        buf.seek(0)
+        buf.truncate()
+        for r in rows:
+            statuses = r["statuses"] or {}
+            if not detail:
+                counts = {k: sum(1 for name, v in statuses.items() if v.get("status") == k and ACTIVITIES[name].level <= r["target_level"])
+                          for k in ("implemented", "partial", "not_implemented", "unknown")}
+                w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], r["target_level"],
+                            None if r["score"] is None else round(r["score"], 1), None if r["coverage"] is None else round(r["coverage"], 1),
+                            r["last_success_at"].isoformat() if r["last_success_at"] else None, r["last_error"],
+                            counts["implemented"], counts["partial"], counts["not_implemented"], counts["unknown"])])
+            else:
+                results = r["results"] or {}
+                for name, v in sorted(statuses.items()):
+                    a = ACTIVITIES[name]
+                    proof = " | ".join(f"{c.title} : {results[c.id].get('message', '')}" for c in by_activity.get(name, []) if c.id in results)
+                    w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], a.dimension, name, a.level,
+                                "oui" if a.level <= r["target_level"] else "non", STATUS_FR.get(v.get("status"), v.get("status")), proof)])
+            yield buf.getvalue()
+            buf.seek(0)
+            buf.truncate()
+
+    name = "periskope-" + "-".join(x for x in (instance, namespace, "detail" if detail else "projets") if x) + ".csv"
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", name)  # query text never reaches the header as is
+    return StreamingResponse(lines(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 class RunRequest(BaseModel):

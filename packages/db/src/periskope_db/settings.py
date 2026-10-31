@@ -14,6 +14,8 @@ class Settings(BaseModel):
     on_demand_per_hour: int = Field(10, ge=1, le=1000)
     evidence_days: int = Field(14, ge=1, le=90)
     branch_run_days: int = Field(30, ge=1, le=365)
+    # A drop of at least this many points between two analyses of the default branch sends an alert.
+    alert_drop: int = Field(5, ge=1, le=100)
 
 
 async def load(db: asyncpg.Pool | asyncpg.Connection) -> Settings:
