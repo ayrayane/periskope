@@ -8,10 +8,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+import httpx
 import structlog
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from periskope_core.settings import env, instances, queue, secret
 from periskope_db import connect
 from periskope_db import settings as hot
@@ -24,6 +26,7 @@ QUIET = timedelta(minutes=10)
 LOCK_KEY, LOCK_TTL_S = "scheduler:lock", 60
 TASKS = {"sync_projects": "sync_at", "catch_up": "catch_up_at", "rollup_history": "rollup_at"}
 SYSTEM_EVENTS = {"project_create", "project_rename", "project_transfer", "project_destroy"}
+ALERTS_EVERY_S = 300
 
 state: dict = {}
 
@@ -56,6 +59,7 @@ async def gitlab_hook(instance: str, request: Request, x_gitlab_token: str = Hea
         raise HTTPException(401)
     event = await request.json()
     arq: ArqRedis = state["arq"]
+    await arq.set(f"webhook:last:{instance}", int(datetime.now().timestamp()))
     name = event.get("event_name") or event.get("object_kind")
     if name in SYSTEM_EVENTS:
         await arq.enqueue_job("run_sync", _queue_name=queue(instance), _job_id=f"sync:{instance}", _defer_by=timedelta(minutes=2))
@@ -98,6 +102,8 @@ async def cron_loop() -> None:
                 now = datetime.now(TZ)
                 # Read every loop: an admin's new hours apply without a restart.
                 conf = await hot.load(state["db"])
+                if await redis.set(f"scheduler:alerts:{int(now.timestamp() // ALERTS_EVERY_S)}", 1, nx=True, ex=2 * ALERTS_EVERY_S):
+                    await alerts()
                 for task, field in TASKS.items():
                     key = f"scheduler:done:{task}:{now.date()}"
                     if now.time() >= time.fromisoformat(getattr(conf, field)) and await redis.set(key, 1, nx=True, ex=2 * 86400):
@@ -162,3 +168,72 @@ async def health() -> dict:
     await state["db"].fetchval("SELECT 1")
     await state["arq"].ping()
     return {"status": "ok"}
+
+
+async def alerts() -> None:
+    """Each score drop on a default branch, posted once to the alert webhook: Mattermost reads `text`, other tools read `props`."""
+    url_file = secret("periskope-alerts") / "url"
+    if not url_file.exists():
+        return
+    url = url_file.read_text().strip()
+    conf = await hot.load(state["db"])
+    rows = await state["db"].fetch(
+        "SELECT r.id, p.instance, p.path, r.score, prev.score AS before FROM runs r JOIN projects p ON p.id = r.project_id"
+        " JOIN LATERAL (SELECT x.score FROM runs x WHERE x.project_id = r.project_id AND x.branch = r.branch AND x.status = 'succeeded'"
+        " AND x.score IS NOT NULL AND x.created_at < r.created_at ORDER BY x.created_at DESC LIMIT 1) prev ON true"
+        " WHERE r.branch = p.default_branch AND r.status = 'succeeded' AND r.finished_at > now() - interval '1 day'"
+        " AND r.score <= prev.score - $1 ORDER BY r.id", conf.alert_drop)
+    base = env("PUBLIC_URL", "").rstrip("/")
+    async with httpx.AsyncClient(timeout=10) as client:
+        for r in rows:
+            key = f"alerted:{r['id']}"
+            if not await state["arq"].set(key, 1, nx=True, ex=7 * 86400):
+                continue
+            link = f" {base}/p/{r['instance']}/{r['path']}" if base else ""
+            text = f"Periskope : le score de {r['path']} ({r['instance']}) est passé de {round(r['before'])} à {round(r['score'])}/100.{link}"
+            props = {"instance": r["instance"], "project": r["path"], "before": r["before"], "score": r["score"], "run": r["id"]}
+            try:
+                resp = await client.post(url, json={"username": "Periskope", "text": text, "props": props})
+                resp.raise_for_status()
+                log.info("alert_sent", run=r["id"], project=r["path"])
+            except httpx.HTTPError as e:
+                await state["arq"].delete(key)  # retried on the next pass
+                log.warning("alert_failed", run=r["id"], error=type(e).__name__)
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics() -> str:
+    """The operating picture in Prometheus text format, read from the database and Valkey at each scrape."""
+    db, arq = state["db"], state["arq"]
+    out: list[str] = []
+
+    def gauge(name: str, help_: str, samples: list[tuple[dict[str, str], float]]) -> None:
+        out.extend([f"# HELP {name} {help_}", f"# TYPE {name} gauge"])
+        for labels, value in samples:
+            tags = ",".join(f'{k}="{v}"' for k, v in labels.items())
+            out.append(f"{name}{{{tags}}} {value}" if tags else f"{name} {value}")
+
+    now = datetime.now().timestamp()
+    gauge("periskope_queue_depth", "Analyses waiting in each instance's queue",
+          [({"instance": s}, await arq.zcard(queue(s))) for s in state["instances"]])
+    hooks = [(s, await arq.get(f"webhook:last:{s}")) for s in state["instances"]]
+    gauge("periskope_last_webhook_age_seconds", "Seconds since the last webhook of each instance (absent: none since Valkey started)",
+          [({"instance": s}, now - int(v)) for s, v in hooks if v])
+    runs_ = await db.fetch("SELECT status, trigger, count(*) AS n FROM runs WHERE created_at > now() - interval '1 hour' GROUP BY 1, 2")
+    gauge("periskope_runs_last_hour", "Analyses created in the last hour, by status and trigger",
+          [({"status": r["status"], "trigger": r["trigger"]}, r["n"]) for r in runs_])
+    done = {r["status"]: r["n"] for r in await db.fetch(
+        "SELECT status, count(*) AS n FROM runs WHERE finished_at > now() - interval '1 hour' AND status IN ('succeeded', 'failed') GROUP BY 1")}
+    finished = done.get("succeeded", 0) + done.get("failed", 0)
+    gauge("periskope_failed_ratio_last_hour", "Share of analyses finished in the last hour that failed", [({}, done.get("failed", 0) / finished if finished else 0)])
+    reuse = await db.fetchrow("SELECT count(*) FILTER (WHERE reused_from IS NOT NULL) AS reused, count(*) AS n FROM runs"
+                              " WHERE status = 'succeeded' AND finished_at > now() - interval '1 day'")
+    gauge("periskope_reused_ratio_last_day", "Share of successful analyses of the last day that reused unchanged results",
+          [({}, reuse["reused"] / reuse["n"] if reuse["n"] else 0)])
+    overdue = await db.fetch(
+        "SELECT p.instance, count(*) FILTER (WHERE s.next_due_at < date_trunc('day', now())) AS late, extract(epoch FROM now() - min(s.next_due_at)) AS oldest"
+        " FROM projects p JOIN project_state s ON s.project_id = p.id WHERE p.enabled AND s.next_due_at <= now() GROUP BY 1")
+    gauge("periskope_overdue_projects", "Projects due before today began and still not analysed (the nightly catch-up is late)",
+          [({"instance": r["instance"]}, r["late"]) for r in overdue])
+    gauge("periskope_overdue_oldest_seconds", "Age of the oldest passed next_due_at", [({"instance": r["instance"]}, float(r["oldest"] or 0)) for r in overdue])
+    return "\n".join(out) + "\n"

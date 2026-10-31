@@ -28,11 +28,14 @@ class GitLab:
         acquire: Callable[[], Awaitable[None]] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         verify: str | bool = True,
+        on_response: Callable[[int], None] | None = None,
     ):
         self.url = url.rstrip("/")
         self.token_file = token_file
         # Waits for a token from the instance's shared bucket before each call.
         self.acquire = acquire
+        # Told every HTTP status (0 when unreachable), for the collector's metrics.
+        self.on_response = on_response or (lambda status: None)
         self.calls = 0
         self._token, self._read_at = "", 0.0
         self.http = httpx.AsyncClient(
@@ -57,10 +60,12 @@ class GitLab:
             try:
                 r = await self.http.request(method, path, headers=self._auth(), **kw)
             except httpx.TransportError as e:
+                self.on_response(0)
                 if attempt == 3:
                     raise SourceDown(f"GitLab injoignable : {type(e).__name__}") from e
                 await asyncio.sleep(2**attempt)
                 continue
+            self.on_response(r.status_code)
             if r.status_code == 401 and not refreshed:
                 refreshed = True
                 self._auth(force=True)

@@ -11,6 +11,7 @@ from periskope_clients.sonar import SonarQube
 from periskope_core.settings import env, instances, queue, secret
 from periskope_db import connect, runs
 from periskope_db.bootstrap import bootstrap
+from prometheus_client import Counter, start_http_server
 
 from periskope_collector.analysis import analyse
 from periskope_collector.ratelimit import Bucket
@@ -19,6 +20,7 @@ from periskope_collector.sync import memberships, sync_projects
 MEMBERSHIP_TTL_S = 900
 BRANCHES_TTL_S = 120
 INSTANCE = env("INSTANCE", "")
+RESPONSES = Counter("periskope_gitlab_responses", "GitLab API responses by HTTP status (0: unreachable)", ["instance", "code"])
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -28,7 +30,9 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["db"] = await connect(min_size=2, max_size=10)
     await bootstrap(ctx["db"], registry)
     bucket = Bucket(ctx["redis"], instance.slug, instance.rate_per_min)
-    ctx["gl"] = GitLab(instance.url, secret(f"gitlab-token-{instance.slug}") / "token", acquire=bucket.acquire, verify=instance.ca_file or True)
+    start_http_server(int(env("METRICS_PORT", "9100")))
+    ctx["gl"] = GitLab(instance.url, secret(f"gitlab-token-{instance.slug}") / "token", acquire=bucket.acquire, verify=instance.ca_file or True,
+                       on_response=lambda code: RESPONSES.labels(instance.slug, str(code)).inc())
     ctx["sonar"] = SonarQube(instance.sonar_url, secret(f"sonar-token-{instance.slug}") / "token", verify=instance.ca_file or True) if instance.sonar_url else None
 
 

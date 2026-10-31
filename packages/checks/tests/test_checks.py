@@ -203,3 +203,15 @@ async def test_sample_code_is_not_the_project(tmp_path):
     assert outcomes["repo.lockfiles"].status == CheckStatus.PASS, outcomes["repo.lockfiles"].message
     assert outcomes["repo.security_unit_tests"].status == CheckStatus.FAIL
     assert outcomes["repo.security_integration_tests"].status == CheckStatus.FAIL
+
+
+async def test_client_reports_every_status_for_metrics(tmp_path):
+    import httpx
+    from periskope_clients.gitlab import GitLab
+
+    token = tmp_path / "token"
+    token.write_text("t")
+    replies = iter([httpx.Response(429, headers={"Retry-After": "0"}), httpx.Response(200, json={"ok": True})])
+    seen: list[int] = []
+    gl = GitLab("https://gitlab.test", token, transport=httpx.MockTransport(lambda req: next(replies)), on_response=seen.append)
+    assert (await gl.get("/api/v4/x")) == {"ok": True} and seen == [429, 200]
