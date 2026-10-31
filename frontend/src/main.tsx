@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { lazy, StrictMode, Suspense, useEffect } from "react";
 import { createRoot } from "react-dom/client";
+import "@fontsource-variable/plus-jakarta-sans";
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, ApiError, Me } from "./api";
 import { Callback, RequireAuth, useUser, userManager } from "./auth";
@@ -35,9 +36,14 @@ function Shell() {
       <a className="skip" href="#main">Aller au contenu</a>
       <header className="top">
         <Link to="/" className="brand"><img src="/favicon.svg" alt="" width="24" height="24" /> Periskope</Link>
-        {me.data?.admin && <nav aria-label="Administration" className="admin-nav"><NavLink to="/cadrage">Cadrage</NavLink><NavLink to="/admin">Administration</NavLink></nav>}
-        <span className="muted small">{user?.profile.preferred_username}</span>
-        <button type="button" className="link" onClick={() => userManager().then((m) => m.signoutRedirect())}>Se déconnecter</button>
+        <nav aria-label="Navigation principale" className="pill-nav">
+          <Link to="/" aria-current={pathname === "/" || pathname.startsWith("/p/") || pathname.startsWith("/r/") ? "page" : undefined}>Tableau de bord</Link>
+          {me.data?.admin && <><NavLink to="/cadrage">Cadrage</NavLink><NavLink to="/admin">Administration</NavLink></>}
+        </nav>
+        <div className="user">
+          <span className="small">{user?.profile.preferred_username}</span>
+          <button type="button" className="link" onClick={() => userManager().then((m) => m.signoutRedirect())}>Se déconnecter</button>
+        </div>
       </header>
       <main id="main">
         <Suspense fallback={<p className="page-status" role="status">Chargement…</p>}>

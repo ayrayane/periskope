@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, Check, Diff, RunDetail } from "../api";
+import FixGuide from "../components/FixGuide";
 import { CheckBadge, RUN_LABEL as LABEL, Score, Skeleton, when } from "../components/status";
 
 export default function Run() {
@@ -30,7 +31,7 @@ export default function Run() {
   return (
     <article aria-labelledby="run-title">
       <nav className="crumbs" aria-label="Fil d'Ariane">
-        <Link to="/">Portefeuille</Link> / <Link to={`/p/${r.instance}/${r.path}`}>{r.path}</Link> / analyse {r.id}
+        <Link to="/">Tableau de bord</Link> / <Link to={`/p/${r.instance}/${r.path}`}>{r.path}</Link> / analyse {r.id}
       </nav>
       {!reference && (
         <p className="banner" role="note">
@@ -60,9 +61,9 @@ export default function Run() {
               <tbody>
                 {(checks.data ?? []).filter((c) => r.results?.[c.id]).map((c) => (
                   <tr key={c.id}>
-                    <td>{c.title}<br /><span className="mono small muted">{c.id}</span></td>
+                    <td title={c.id}>{c.title}</td>
                     <td><CheckBadge status={r.results![c.id].status} /></td>
-                    <td>{r.results![c.id].message}</td>
+                    <td>{r.results![c.id].message}{!["pass", "not_applicable"].includes(r.results![c.id].status) && <FixGuide fix={c.fix} />}</td>
                   </tr>
                 ))}
               </tbody>

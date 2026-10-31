@@ -2,9 +2,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Activity, ActivityStatus, api, ApiError, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run } from "../api";
+import { Activity, ActivityStatus, api, ApiError, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run, Summary } from "../api";
 import BranchPicker from "../components/BranchPicker";
 import ScoreChart from "../components/ScoreChart";
+import FixGuide from "../components/FixGuide";
+import GroupNav, { ScopeCrumbs, useScopeData } from "../components/GroupNav";
+import { Help } from "../components/Help";
+import Radar from "../components/Radar";
 import { ActivityBadge, CheckBadge, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
 import { ScopeEditor } from "./Scope";
 
@@ -29,6 +33,7 @@ export default function Project() {
   const [branchInvalid, setBranchInvalid] = useState(false);
 
   const project = useQuery({ queryKey: ["project", url], queryFn: () => api<P>(url) });
+  const scope = useScopeData();
   const checks = useQuery({ queryKey: ["checks"], queryFn: () => api<Check[]>("/checks"), staleTime: Infinity });
   const activities = useQuery({ queryKey: ["activities"], queryFn: () => api<{ items: Activity[] }>("/activities"), staleTime: Infinity });
   const activeId = project.data?.active_run;
@@ -63,6 +68,7 @@ export default function Project() {
   }
   if (!project.data) return <Skeleton lines={6} label="Chargement du projet…" />;
   const p = project.data;
+  const gitlab = scope.instances.find((i) => i.slug === p.instance);
   const tabs = TABS.filter(([key]) => key !== "cadrage" || p.can_launch);
   const asked = params.get("vue") as Tab | null;
   const tab: Tab = tabs.some(([k]) => k === asked) ? asked! : "activites";
@@ -72,17 +78,25 @@ export default function Project() {
   const onBranch = branch && branch !== p.default_branch ? branch : null;
 
   return (
-    <article aria-labelledby="project-title">
-      <nav className="crumbs" aria-label="Fil d'Ariane"><Link to="/">Portefeuille</Link> <span aria-hidden="true">/</span> {p.instance}</nav>
+    <div className="with-nav">
+    <GroupNav instance={p.instance} namespace={p.namespace_path} />
+    <article aria-labelledby="project-title" className="dash-main">
+      <ScopeCrumbs instance={p.instance} namespace={p.namespace_path} instances={scope.instances} />
       <header className="project-head">
         <div>
-          <h1 id="project-title" tabIndex={-1}>{p.path}</h1>
+          <div className="title-row">
+            <h1 id="project-title" tabIndex={-1}>{p.path.split("/").at(-1)}</h1>
+            {gitlab && <a className="gitlab-link" href={`${gitlab.url.replace(/\/$/, "")}/${p.path}`} target="_blank" rel="noreferrer">Ouvrir dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
+          </div>
           <p className="muted">
-            Branche de référence <code>{p.default_branch}</code> · niveau cible {p.target_level}
+            <span className="mono">{p.path}</span>{gitlab && <> sur {gitlab.name}</>} · branche de référence <code>{p.default_branch}</code> · niveau cible {p.target_level}
             {p.last_run && <> · analysé le {when(p.last_run.finished_at)} sur <code>{p.last_run.commit_sha.slice(0, 8)}</code></>}
           </p>
         </div>
-        <Score score={p.score} coverage={p.coverage} size="lg" />
+        <div className="head-score">
+          <Score score={p.score} coverage={p.coverage} size="lg" />
+          <span className="muted small">Comment lire ces chiffres <Help term="chiffres" label="le score et la couverture" /></span>
+        </div>
       </header>
 
       <div className="run-bar">
@@ -101,6 +115,8 @@ export default function Project() {
         {launch.error && <span className="error" role="alert">{(launch.error as Error).message}</span>}
       </div>
       {p.last_error && <p className="error">Dernière analyse en échec : {p.last_error}. Le score affiché reste celui de la dernière analyse réussie.</p>}
+
+      {p.last_run && <NextSteps project={p} url={url} activities={activities.data?.items ?? []} checks={checks.data ?? []} onAll={() => selectTab("a-faire")} />}
 
       <div role="tablist" aria-label="Vues du projet" className="tabs">
         {tabs.map(([key, label], i) => (
@@ -123,16 +139,26 @@ export default function Project() {
         ) : !p.last_run && tab !== "historique" ? (
           <p className="empty">Ce projet n'a pas encore été analysé.</p>
         ) : tab === "activites" ? (
+          <>
+          <p className="panel-intro">Les pratiques DevSecOps attendues <Help term="activite" label="une pratique" /> et leur état <Help term="statuts" label="les statuts" />, rangées par dimension.</p>
           <Activities project={p} checks={checks.data ?? []} activities={activities.data?.items ?? []} />
+          </>
         ) : tab === "preuves" ? (
+          <>
+          <p className="panel-intro">Chaque contrôle automatique <Help term="preuve" label="une preuve" />, ce qu'il a constaté et, s'il échoue, comment le corriger.</p>
           <Checks results={results} checks={checks.data ?? []} />
+          </>
         ) : tab === "a-faire" ? (
-          <Todo url={url} targetLevel={p.target_level} />
+          <>
+          <p className="panel-intro">Le plan pour atteindre le niveau cible <Help term="cible" label="le niveau cible" />, dans l'ordre : niveaux bas et prérequis d'abord.</p>
+          <Todo url={url} targetLevel={p.target_level} checks={checks.data ?? []} />
+          </>
         ) : (
           <History url={url} defaultBranch={p.default_branch} />
         )}
       </section>
     </article>
+    </div>
   );
 }
 
@@ -145,12 +171,29 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
     const measured = counted.filter((a) => project.statuses?.[a.name] && project.statuses[a.name].status !== "unknown");
     return counted.length ? Math.round((100 * measured.length) / counted.length) : 0;
   };
+  const summary = useQuery({ queryKey: ["projects-summary"], queryFn: () => api<Summary>("/projects/summary"), staleTime: 30_000 });
+  const sorted = [...byDimension].sort();
+  const anchor = (d: string) => `dim-${d.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <>
-      {[...byDimension].sort().map(([dimension, list]) => {
+      <div className="overview">
+        <Radar title="Profil DSOMM" axes={sorted.map(([d]) => d)} series={[
+          { label: "Ce projet", values: project.by_dimension ?? {}, tone: "main" },
+          ...(summary.data ? [{ label: "Moyenne de votre périmètre", values: summary.data.dimensions, tone: "ref" as const }] : []),
+        ]} />
+        <nav className="bento" aria-label="Dimensions DSOMM">
+          {sorted.map(([dimension, list]) => (
+            <a key={dimension} href={`#${anchor(dimension)}`} className="dim-card">
+              <Score score={project.by_dimension?.[dimension] ?? null} coverage={coverage(list)} size="lg" />
+              <span className="dim-name" lang="en">{dimension}</span>
+            </a>
+          ))}
+        </nav>
+      </div>
+      {sorted.map(([dimension, list]) => {
         const s = project.by_dimension?.[dimension];
         return (
-          <section key={dimension} className="group">
+          <section key={dimension} className="group" id={anchor(dimension)}>
             <h2 lang="en">{dimension} <span className="muted small" lang="fr">{s != null ? `${Math.round(s)}/100 · couverture ${coverage(list)} %` : "rien de mesuré"}</span></h2>
             <div className="table-scroll">
               <table>
@@ -194,9 +237,10 @@ function Checks({ results, checks }: { results: Record<string, CheckResult>; che
                   const r = results[c.id];
                   return (
                     <tr key={c.id}>
-                      <td>{c.title}{c.kind === "hint" && <span className="muted small"> · indice</span>}<br /><span className="mono small muted">{c.id}</span></td>
+                      <td title={c.id}>{c.title}{c.kind === "hint" && <span className="muted small"> · indice, à confirmer</span>}</td>
                       <td>{c.scope?.decision === "excluded" ? <span className="badge tone-not_applicable" title={c.scope.reason}>Écartée</span> : r ? <CheckBadge status={r.status} /> : <span className="muted">Non collectée</span>}</td>
-                      <td>{c.scope?.decision === "excluded" ? <span className="muted">{c.scope.reason}</span> : r?.message}{r?.reused && <span className="muted small"> (reprise, rien n'a changé)</span>}</td>
+                      <td>{c.scope?.decision === "excluded" ? <span className="muted">{c.scope.reason}</span> : r?.message}{r?.reused && <span className="muted small"> (inchangé depuis l'analyse précédente)</span>}
+                        {c.scope?.decision !== "excluded" && r && r.status !== "pass" && r.status !== "not_applicable" && <FixGuide fix={c.fix} />}</td>
                     </tr>
                   );
                 })}
@@ -209,7 +253,8 @@ function Checks({ results, checks }: { results: Record<string, CheckResult>; che
   );
 }
 
-function Todo({ url, targetLevel }: { url: string; targetLevel: number }) {
+function Todo({ url, targetLevel, checks }: { url: string; targetLevel: number; checks: Check[] }) {
+  const fixes = Object.fromEntries(checks.map((c) => [c.id, c.fix]));
   const items = useQuery({ queryKey: ["roadmap", url], queryFn: () => api<RoadmapItem[]>(`${url}/roadmap`) });
   if (items.isError) return <p className="error" role="alert">{(items.error as Error).message}</p>;
   if (!items.data) return <Skeleton />;
@@ -221,7 +266,7 @@ function Todo({ url, targetLevel }: { url: string; targetLevel: number }) {
           <h2><span lang="en">{a.activity}</span> <span className="muted small">niveau {a.level}{a.status === "partial" ? " · partielle" : ""}</span></h2>
           {a.blocked_by.length > 0 && <p className="muted small">Prérequis : <span lang="en">{a.blocked_by.join(", ")}</span></p>}
           <ul>
-            {a.steps.map((s) => <li key={s.check}>{s.action ?? s.message}{s.action && <><br /><span className="muted small">Constat : {s.message}</span></>}</li>)}
+            {a.steps.map((s) => <li key={s.check}>{s.action ?? s.message}{s.action && <><br /><span className="muted small">Constat : {s.message}</span></>}<FixGuide fix={fixes[s.check]} /></li>)}
           </ul>
         </li>
       ))}
@@ -254,5 +299,41 @@ function History({ url, defaultBranch }: { url: string; defaultBranch: string | 
         </table>
       </div>
     </>
+  );
+}
+
+/** The first thing a visitor needs: where the project stands, in one sentence, and the next three things to do. */
+function NextSteps({ project, url, activities, checks, onAll }: { project: P; url: string; activities: Activity[]; checks: Check[]; onAll: () => void }) {
+  const items = useQuery({ queryKey: ["roadmap", url], queryFn: () => api<RoadmapItem[]>(`${url}/roadmap`) });
+  const count = (st: ActivityStatus) => activities.filter((a) => a.level <= project.target_level && project.statuses?.[a.name]?.status === st).length;
+  const [done, partial, missing, unknown] = (["implemented", "partial", "not_implemented", "unknown"] as const).map(count);
+  const fixes = Object.fromEntries(checks.map((c) => [c.id, c.fix]));
+  const next = (items.data ?? []).slice(0, 3);
+  return (
+    <section className="next" aria-labelledby="next-title">
+      <div className="next-summary">
+        <h2 id="next-title">Par où commencer</h2>
+        <p>
+          Jusqu'au niveau cible {project.target_level} <Help term="cible" label="le niveau cible" />, ce projet a <strong className="t-pass">{done} pratique{done > 1 ? "s" : ""} en place</strong>,{" "}
+          <strong className="t-amber">{partial} partielle{partial > 1 ? "s" : ""}</strong> et <strong className="t-fail">{missing} absente{missing > 1 ? "s" : ""}</strong>.
+          {unknown > 0 && <> {unknown} pratique{unknown > 1 ? "s n'ont" : " n'a"} pas pu être vérifiée{unknown > 1 ? "s" : ""} <Help term="couverture" label="la couverture" />.</>}
+        </p>
+      </div>
+      {items.data && (next.length === 0 ? <p className="t-pass"><strong>Niveau cible atteint : rien à faire.</strong></p> : (
+        <ol className="next-steps">
+          {next.map((a) => {
+            const step = a.steps[0];
+            return (
+              <li key={a.activity}>
+                <span className="next-what">{step?.action ?? a.activity}</span>
+                <span className="muted small"> · <span lang="en">{a.activity}</span>, niveau {a.level}</span>
+                {step && <FixGuide fix={fixes[step.check]} />}
+              </li>
+            );
+          })}
+        </ol>
+      ))}
+      {(items.data?.length ?? 0) > 3 && <button type="button" className="link" onClick={onAll}>Voir tout le plan ({items.data!.length} pratiques)</button>}
+    </section>
   );
 }

@@ -30,6 +30,13 @@ export const projectUrl = (instance: string, path: string) => `/projects/${encod
 export type CheckStatus = "pass" | "fail" | "unknown" | "not_applicable";
 export type ActivityStatus = "implemented" | "partial" | "not_implemented" | "unknown" | "not_applicable" | "out_of_scope";
 
+export interface Instance { slug: string; name: string; url: string; enterprise: boolean; last_sync_at: string | null }
+export interface Group { instance: string; path: string; projects: number; analysed: number; score_sum: number }
+
+export interface Summary { total: number; analysed: number; score: number | null; coverage: number | null; below_target: number; failed: number; never: number; high: number; mid: number; low: number; dimensions: Record<string, number>;
+  gaps: { activity: string; level: number; missing: number; measured: number }[];
+  lowest: { instance: string; path: string; score: number; coverage: number; last_success_at: string | null }[] }
+
 export interface ProjectRow {
   id: number;
   instance: string;
@@ -82,6 +89,14 @@ export interface Check {
   level: number;
   kind: "proof" | "hint" | "secondary";
   scope: { decision: "retained" | "excluded"; reason: string } | null;
+  fix: Fix | null;
+}
+
+export interface Fix {
+  steps: string[];
+  snippet?: { file: string; lang: string; code: string };
+  docs: { title: string; url: string }[];
+  tier?: string;
 }
 
 export interface Activity {

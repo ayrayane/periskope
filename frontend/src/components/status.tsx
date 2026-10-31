@@ -62,6 +62,19 @@ export function Score({ score, coverage, size = "md" }: { score: number | null; 
   }
   // The number stays the message; the colour and gauge only reinforce it.
   const band = score >= 75 ? "high" : score >= 50 ? "mid" : "low";
+  if (size === "lg") {
+    // Ring: circumference 100 on r=15.915, so the dash length is the score itself.
+    return (
+      <span className={`score-ring band-${band}`}>
+        <svg viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+          <circle className="track" cx="18" cy="18" r="15.915" />
+          <circle className="value" cx="18" cy="18" r="15.915" strokeDasharray={`${score} ${100 - score}`} />
+        </svg>
+        <span className="ring-label"><strong>{Math.round(score)}</strong><span className="of">/100</span></span>
+        <span className="coverage" title="Part des activités réellement mesurées">couverture {Math.round(coverage ?? 0)} %</span>
+      </span>
+    );
+  }
   return (
     <span className={`score score-${size} band-${band}`} style={{ "--pct": `${score}%` } as CSSProperties}>
       <strong>{Math.round(score)}</strong>
