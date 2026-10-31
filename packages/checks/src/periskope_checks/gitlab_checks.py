@@ -119,7 +119,7 @@ async def secret_detection(ctx: Context) -> Outcome:
     return Outcome.ok("détection de secrets dans la CI", jobs=jobs) if jobs else Outcome.fail("aucun job de détection de secrets")
 
 
-@check("gitlab.image_secret_scan", Depends.COMMIT, "Activer le scan de conteneurs avec la détection de secrets (CS_... / trivy --scanners secret).")
+@check("gitlab.image_secret_scan", Depends.COMMIT, "Scanner les images construites à la recherche de secrets oubliés.")
 async def image_secret_scan(ctx: Context) -> Outcome:
     jobs = await ci_match(ctx, r"container[_-]scanning|trivy")
     if jobs is None:
@@ -183,6 +183,8 @@ async def protection_requirement(ctx: Context) -> Outcome:
 
 @check("gitlab.approvals_required", Depends.SETTINGS, "Exiger au moins une approbation et interdire à l'auteur d'approuver sa MR.")
 async def approvals_required(ctx: Context) -> Outcome:
+    if not ctx.enterprise:
+        return Outcome.unknown("règles d'approbation indisponibles (GitLab sans licence Premium)")
     settings, rule = await ctx.approvals(), await ctx.default_rule()
     if settings is None:
         return Outcome.unknown("réglages d'approbation illisibles")
@@ -333,6 +335,8 @@ async def secret_push_protection(ctx: Context) -> Outcome:
 
 @check("gitlab.reset_approvals_on_push", Depends.SETTINGS, "Cocher « Remove all approvals when commits are added ».")
 async def reset_approvals_on_push(ctx: Context) -> Outcome:
+    if not ctx.enterprise:
+        return Outcome.unknown("règles d'approbation indisponibles (GitLab sans licence Premium)")
     settings = await ctx.approvals()
     if settings is None or "reset_approvals_on_push" not in settings:
         return Outcome.unknown("réglages d'approbation illisibles")

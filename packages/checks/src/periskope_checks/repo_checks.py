@@ -5,7 +5,7 @@ import re
 
 from periskope_core.models import Outcome
 
-from periskope_checks.context import Context
+from periskope_checks.context import NOT_PRODUCT, Context
 from periskope_checks.registry import Depends, check
 
 # Manifest → lock files that pin it.
@@ -49,7 +49,7 @@ async def lockfiles(ctx: Context) -> Outcome:
     if tree is None:
         return Outcome.unknown("arborescence illisible")
     paths = set(tree[0])
-    manifests = [p for p in paths if p.rsplit("/", 1)[-1] in LOCKS and "node_modules/" not in p and "vendor/" not in p]
+    manifests = [p for p in paths if p.rsplit("/", 1)[-1] in LOCKS and not NOT_PRODUCT.search(p)]
     if not manifests:
         return Outcome.not_applicable("aucun manifeste de dépendances")
     missing = [m for m in manifests if not any(f"{m.rsplit('/', 1)[0] + '/' if '/' in m else ''}{lock}" in paths for lock in LOCKS[m.rsplit('/', 1)[-1]])]

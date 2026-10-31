@@ -19,6 +19,8 @@ SONAR_METRICS = "ncloc,vulnerabilities,security_hotspots,security_hotspots_revie
 # The files repository checks read: security docs, Dockerfiles, CODEOWNERS, pre-commit config.
 READ_FILES = r"(^|/)(SECURITY|PATCH[_-]?POLICY|security[_-]policy)(\.md|\.rst|\.txt)?$|(^|/)(Docker|Container)file[^/]*$|^(\.gitlab/|docs/)?CODEOWNERS$|^\.pre-commit-config\.yaml$"
 LIVE_DAYS = 90
+# Sample, vendored and generated code is not the product: repository checks never judge the project on it.
+NOT_PRODUCT = re.compile(r"(^|/)(examples?|samples?|demos?|vendor|third[_-]?party|node_modules|testdata|fixtures)/", re.IGNORECASE)
 
 # One query for the project's settings, protections, variables, members, MRs, pipelines and vulnerabilities.
 PROJECT_QUERY = """
@@ -161,7 +163,7 @@ class Context:
         if tree is None:
             return None
         rx = re.compile(pattern, re.IGNORECASE)
-        return [p for p in tree[0] if rx.search(p)]
+        return [p for p in tree[0] if rx.search(p) and not NOT_PRODUCT.search(p)]
 
     # SonarQube of the instance, when it has one and the project has a key.
     @once

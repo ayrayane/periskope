@@ -182,6 +182,24 @@ async def test_unknown(check_id, tmp_path):
 
 
 async def test_ce_instance_marks_ultimate_checks_unknown(tmp_path):
-    ids = ["gitlab.xss_open", "gitlab.secret_push_protection", "gitlab.secure_headers"]
+    ids = ["gitlab.xss_open", "gitlab.secret_push_protection", "gitlab.secure_headers", "gitlab.approvals_required", "gitlab.reset_approvals_on_push"]
     outcomes = await run_all(context(good(), tmp_path, enterprise=False), ids)
     assert {o.status for o in outcomes.values()} == {CheckStatus.UNKNOWN}
+
+
+def add_paths(*names):
+    def apply(d):
+        d["tree"] += [{"path": n, "type": "blob"} for n in names]
+    return apply
+
+
+async def test_sample_code_is_not_the_project(tmp_path):
+    # Seen on flask: manifests and an auth test under examples/ judged as if they were the product.
+    data = good()
+    add_paths("examples/celery/pyproject.toml", "samples/demo/package.json", "vendor/lib/pyproject.toml")(data)
+    drop_paths("tests/test_auth.py", "tests/integration/test_access_control.py")(data)
+    add_paths("examples/tutorial/tests/test_auth.py", "demo/tests/integration/test_access_control.py")(data)
+    outcomes = await run_all(context(data, tmp_path), ["repo.lockfiles", "repo.security_unit_tests", "repo.security_integration_tests"])
+    assert outcomes["repo.lockfiles"].status == CheckStatus.PASS, outcomes["repo.lockfiles"].message
+    assert outcomes["repo.security_unit_tests"].status == CheckStatus.FAIL
+    assert outcomes["repo.security_integration_tests"].status == CheckStatus.FAIL
