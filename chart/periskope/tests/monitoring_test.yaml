@@ -1,0 +1,28 @@
+suite: monitoring and alerts
+templates: [monitoring.yaml, scheduler.yaml]
+set:
+  host: periskope.test
+  instances:
+    - { slug: gl-prod, name: Prod, url: https://gl-prod.test }
+tests:
+  - it: renders nothing while monitoring is off
+    template: monitoring.yaml
+    asserts:
+      - hasDocuments: { count: 0 }
+  - it: renders the monitors and the spec's alert rules
+    template: monitoring.yaml
+    set:
+      monitoring: { enabled: true, labels: { release: kube-prometheus-stack } }
+    asserts:
+      - hasDocuments: { count: 3 }
+      - containsDocument: { kind: PrometheusRule, apiVersion: monitoring.coreos.com/v1, name: periskope, any: true }
+      - containsDocument: { kind: PodMonitor, apiVersion: monitoring.coreos.com/v1, name: periskope-collectors, any: true }
+  - it: mounts the alert webhook only when its Secret is named
+    template: scheduler.yaml
+    documentIndex: 0
+    set:
+      alerts: { secret: periskope-alerts }
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: { name: alerts, secret: { secretName: periskope-alerts } }

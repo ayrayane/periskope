@@ -10,6 +10,11 @@ spec:
   backup:
     barmanObjectStore:
       destinationPath: {{ .Values.postgres.backup.destinationPath }}
+      {{- with .Values.postgres.backup.endpointURL }}
+      endpointURL: {{ . }}
+      {{- end }}
+      wal: { compression: gzip }
+      data: { compression: gzip }
       s3Credentials:
         accessKeyId: { name: {{ .Values.postgres.backup.secret }}, key: ACCESS_KEY_ID }
         secretAccessKey: { name: {{ .Values.postgres.backup.secret }}, key: ACCESS_SECRET_KEY }

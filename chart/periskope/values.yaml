@@ -21,6 +21,14 @@ image:
   pullSecret: ""
 
 host: periskope.example.com
+# Score-drop alerts: name of a Secret holding the webhook in key `url` (Mattermost incoming webhook or any JSON endpoint). Empty: no alerts.
+alerts:
+  secret: ""
+# Prometheus Operator resources: a ServiceMonitor (scheduler), a PodMonitor (collectors) and the spec's alert rules.
+monitoring:
+  enabled: false
+  namespace: monitoring            # where Prometheus runs, let through the NetworkPolicy
+  labels: {}                       # labels your Prometheus selects monitors and rules by, e.g. release: kube-prometheus-stack
 ingress:
   className: ""
   annotations: {}
@@ -63,6 +71,7 @@ postgres:
   backup:
     enabled: false
     destinationPath: ""           # s3://bucket/periskope
+    endpointURL: ""               # S3 endpoint other than AWS, e.g. http://garage.garage.svc:3900
     secret: ""                    # Secret with ACCESS_KEY_ID / ACCESS_SECRET_KEY
 
 api:

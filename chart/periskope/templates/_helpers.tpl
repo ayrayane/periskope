@@ -20,6 +20,7 @@ env:
   - { name: PERISKOPE_INSTANCES_FILE, value: /etc/periskope/instances.json }
   - { name: PERISKOPE_SECRETS_DIR, value: /var/run/secrets/periskope }
   - { name: PERISKOPE_TIMEZONE, value: {{ .Values.timezone | quote }} }
+  - { name: PERISKOPE_PUBLIC_URL, value: {{ printf "https://%s" .Values.host | quote }} }
   - { name: PERISKOPE_OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }} }
   - { name: PERISKOPE_OIDC_AUDIENCE, value: {{ .Values.oidc.audience | quote }} }
   - { name: PERISKOPE_OIDC_CLIENT_ID, value: {{ .Values.oidc.clientId | quote }} }

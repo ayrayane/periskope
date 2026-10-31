@@ -17,6 +17,7 @@ spec:
             - { name: PERISKOPE_INSTANCE, value: {{ .slug }} }
             - { name: PERISKOPE_COLLECTOR_CONCURRENCY, value: {{ $.Values.collector.concurrency | quote }} }
           args: [collector]
+          ports: [{ name: metrics, containerPort: 9100 }]
           resources: {{ toJson $.Values.collector.resources }}
           volumeMounts:
             {{- include "periskope.mounts" $ | nindent 12 }}

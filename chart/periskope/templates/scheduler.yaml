@@ -24,10 +24,17 @@ spec:
             {{- range .Values.instances }}
             - { name: hook-{{ .slug }}, mountPath: /var/run/secrets/periskope/gitlab-webhook-{{ .slug }}, readOnly: true }
             {{- end }}
+            {{- if .Values.alerts.secret }}
+            - { name: alerts, mountPath: /var/run/secrets/periskope/periskope-alerts, readOnly: true }
+            {{- end }}
       volumes:
         {{- include "periskope.volumes" . | nindent 8 }}
         {{- range .Values.instances }}
         - { name: hook-{{ .slug }}, secret: { secretName: {{ include "periskope.webhookSecret" (dict "root" $ "i" .) }} } }
+        {{- end }}
+        {{- if .Values.alerts.secret }}
+        # Key `url`: the Mattermost (or any JSON) incoming webhook. A URL with a token in it is a secret, never a value.
+        - { name: alerts, secret: { secretName: {{ .Values.alerts.secret }} } }
         {{- end }}
 ---
 apiVersion: v1

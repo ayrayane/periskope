@@ -1,0 +1,44 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata: { name: periskope-scheduler, labels: {{ toJson .Values.monitoring.labels }} }
+spec:
+  selector: { matchLabels: { app: periskope-scheduler } }
+  endpoints: [{ port: http, path: /metrics, interval: 60s }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata: { name: periskope-collectors, labels: {{ toJson .Values.monitoring.labels }} }
+spec:
+  selector: { matchLabels: { app: periskope-collector } }
+  podMetricsEndpoints: [{ port: metrics, interval: 60s }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: { name: periskope, labels: {{ toJson .Values.monitoring.labels }} }
+spec:
+  groups:
+    - name: periskope
+      rules:
+        # The spec's three alerts, plus the GitLab throttling rate it asks to watch.
+        - alert: PeriskopeCatchUpLate
+          expr: sum by (instance) (periskope_overdue_projects) > 0 and on() hour() >= 4 and on() hour() < 18
+          for: 30m
+          labels: { severity: warning }
+          annotations: { summary: "Revue nocturne non terminée sur {{ "{{" }} $labels.instance {{ "}}" }}", description: "Des projets dus avant minuit ne sont toujours pas analysés." }
+        - alert: PeriskopeAnalysesFailing
+          expr: periskope_failed_ratio_last_hour > 0.1
+          for: 15m
+          labels: { severity: warning }
+          annotations: { summary: "Plus de 10 % d'analyses en échec sur une heure" }
+        - alert: PeriskopeNoWebhook
+          expr: periskope_last_webhook_age_seconds > 1800 and on() hour() >= 7 and on() hour() < 17 and on() day_of_week() > 0 and on() day_of_week() < 6
+          for: 10m
+          labels: { severity: warning }
+          annotations: { summary: "Aucun webhook de {{ "{{" }} $labels.instance {{ "}}" }} depuis 30 minutes en journée", description: "Le hook système GitLab est peut-être cassé." }
+        - alert: PeriskopeGitLabThrottled
+          expr: sum by (instance) (rate(periskope_gitlab_responses_total{code="429"}[15m])) / sum by (instance) (rate(periskope_gitlab_responses_total[15m])) > 0.01
+          for: 15m
+          labels: { severity: info }
+          annotations: { summary: "Plus de 1 % d'appels limités (429) par {{ "{{" }} $labels.instance {{ "}}" }}" }
+{{- end }}
