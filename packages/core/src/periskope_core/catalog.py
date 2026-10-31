@@ -1,4 +1,7 @@
 """The 53 retained checks, from the spec table "Les 53 preuves retenues"."""
+import json
+from importlib.resources import files
+
 from periskope_core.models import Check, Kind
 
 CHECKS: tuple[Check, ...] = (
@@ -56,3 +59,6 @@ CHECKS: tuple[Check, ...] = (
     Check('gitlab.dead_code', 'Détection de code mort', 'CI fusionnée', 'Dead code elimination', 5, Kind.HINT),
     Check('sonar.duplication', 'Duplication mesurée et sous le seuil', 'SonarQube', 'Exclusion of source code duplicates', 5, Kind.PROOF),
 )
+
+# How to fix each check: steps, an optional snippet and official docs. Served with the catalogue, never stored with runs.
+FIXES: dict[str, dict] = json.loads(files("periskope_core").joinpath("data/fixes.json").read_text())

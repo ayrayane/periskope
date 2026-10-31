@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, R
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from periskope_core.catalog import CHECKS
+from periskope_core.catalog import CHECKS, FIXES
 from periskope_core.diff import diff
 from periskope_core.referential import ACTIVITIES, REFERENTIAL_VERSION
 from periskope_core.roadmap import roadmap
@@ -125,11 +125,40 @@ async def me_(me: Me) -> dict:
 
 @api.get("/instances")
 async def list_instances(me: Me) -> list[dict]:
+    """Admins see every instance; others only the instances where they can see a project, so names and URLs do not leak."""
     rows = await state["db"].fetch("SELECT slug, name, url, enterprise, last_sync_at FROM gitlab_instances WHERE enabled ORDER BY slug")
-    return [dict(r) for r in rows]
+    if me.admin:
+        return [dict(r) for r in rows]
+    where, params = scoped(me, None, None)
+    mine = {r["instance"] for r in await state["db"].fetch(f"SELECT DISTINCT p.instance FROM projects p WHERE {where}", *params)}
+    return [dict(r) for r in rows if r["slug"] in mine]
 
 
 SORTS = {"score": "s.score", "name": "p.path", "last_run": "s.last_success_at"}
+
+
+def scoped(me: Viewer, instance: str | None, namespace: str | None) -> tuple[str, list]:
+    """The viewer's enabled projects, narrowed to one GitLab instance and one group with its subgroups."""
+    where, params = me.where("p", 1)
+    conds = [where, "p.enabled"]
+    if instance:
+        params.append(instance)
+        conds.append(f"p.instance = ${len(params)}")
+    if namespace:
+        params.append(namespace)
+        n = f"${len(params)}"
+        conds.append(f"(p.namespace_path = {n} OR left(p.namespace_path, length({n}) + 1) = {n} || '/')")
+    return " AND ".join(conds), params
+
+
+@api.get("/groups")
+async def list_groups(me: Me) -> list[dict]:
+    """Groups holding visible projects, per instance, with what the tree needs to roll counts and scores up to parents."""
+    where, params = scoped(me, None, None)
+    rows = await state["db"].fetch(
+        "SELECT p.instance, p.namespace_path AS path, count(*) AS projects, count(s.score) AS analysed, coalesce(sum(s.score), 0) AS score_sum"
+        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE {where} GROUP BY 1, 2 ORDER BY 1, 2", *params)
+    return [dict(r) for r in rows]
 
 
 @api.get("/projects")
@@ -147,16 +176,11 @@ async def list_projects(
     limit: int = Query(50, ge=1, le=200),
 ) -> dict:
     """The portfolio reads project_state, never runs: it pages on an index."""
-    where, params = me.where("p", 1)
-    conds = [where, "p.enabled"]
+    where, params = scoped(me, instance, namespace)
+    conds = [where]
     def arg(value: Any) -> str:
         params.append(value)
         return f"${len(params)}"
-    if instance:
-        conds.append(f"p.instance = {arg(instance)}")
-    if namespace:
-        n = arg(namespace)
-        conds.append(f"(p.namespace_path = {n} OR left(p.namespace_path, length({n}) + 1) = {n} || '/')")
     if q:
         conds.append(f"strpos(lower(p.path), lower({arg(q)})) > 0")
     if below_target:
@@ -191,6 +215,37 @@ async def list_projects(
         sort_value = {"score": last["score"], "name": last["path"], "last_run": last["last_success_at"]}[sort]
         nxt = base64.urlsafe_b64encode(json.dumps([sort_value, last["id"]], default=str).encode()).decode()
     return {"items": items, "next_cursor": nxt}
+
+
+@api.get("/projects/summary")
+async def projects_summary(me: Me, instance: str | None = None, namespace: str | None = None) -> dict:
+    """The portfolio's headline figures over the viewer's scope (or one instance or group of it), with the same definitions as the list filters."""
+    where, params = scoped(me, instance, namespace)
+    row = await state["db"].fetchrow(
+        "SELECT count(*) AS total, count(s.last_run_id) AS analysed, avg(s.score) AS score, avg(s.coverage) AS coverage,"
+        " count(*) FILTER (WHERE s.score < 100) AS below_target, count(*) FILTER (WHERE s.last_error IS NOT NULL) AS failed,"
+        " count(*) FILTER (WHERE s.last_run_id IS NULL) AS never, count(*) FILTER (WHERE s.score >= 75) AS high,"
+        " count(*) FILTER (WHERE s.score >= 50 AND s.score < 75) AS mid, count(*) FILTER (WHERE s.score < 50) AS low"
+        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE {where}", *params)
+    dims = await state["db"].fetch(
+        "SELECT d.key AS dimension, avg(d.value::text::float) AS score FROM projects p JOIN project_state s ON s.project_id = p.id,"
+        f" jsonb_each(s.by_dimension) d WHERE {where} AND jsonb_typeof(d.value) = 'number' GROUP BY d.key ORDER BY d.key", *params)
+    # Most missing practices across the scope, each counted only up to its project's target level.
+    names, levels = [a.name for a in ACTIVITIES.values()], [a.level for a in ACTIVITIES.values()]
+    n, lv = len(params) + 1, len(params) + 2
+    gaps = await state["db"].fetch(
+        "SELECT d.key AS activity, max(lv.level) AS level,"
+        " count(*) FILTER (WHERE d.value->>'status' IN ('not_implemented', 'partial')) AS missing,"
+        " count(*) FILTER (WHERE d.value->>'status' IN ('implemented', 'not_implemented', 'partial')) AS measured"
+        f" FROM projects p JOIN project_state s ON s.project_id = p.id, jsonb_each(s.statuses) d, unnest(${n}::text[], ${lv}::int[]) AS lv(name, level)"
+        f" WHERE {where} AND lv.name = d.key AND lv.level <= p.target_level"
+        " GROUP BY d.key HAVING count(*) FILTER (WHERE d.value->>'status' IN ('not_implemented', 'partial')) > 0"
+        " ORDER BY missing DESC, level, d.key LIMIT 5", *params, names, levels)
+    lowest = await state["db"].fetch(
+        "SELECT p.instance, p.path, s.score, s.coverage, s.last_success_at FROM projects p JOIN project_state s ON s.project_id = p.id"
+        f" WHERE {where} AND s.score IS NOT NULL ORDER BY s.score, p.path LIMIT 3", *params)
+    return {**dict(row), "dimensions": {d["dimension"]: d["score"] for d in dims},
+            "gaps": [dict(g) for g in gaps], "lowest": [dict(r) for r in lowest]}
 
 
 class RunRequest(BaseModel):
@@ -386,7 +441,7 @@ async def cancel_run(run_id: int, me: Me) -> None:
 async def checks(me: Me) -> list[dict]:
     decisions = {r["target_id"]: dict(r) for r in await state["db"].fetch(
         "SELECT target_id, decision, reason, author, updated_at FROM scope_decisions WHERE target = 'check' AND instance IS NULL")}
-    return [{**c._asdict(), "scope": decisions.get(c.id)} for c in CHECKS]
+    return [{**c._asdict(), "scope": decisions.get(c.id), "fix": FIXES.get(c.id)} for c in CHECKS]
 
 
 @api.get("/activities")

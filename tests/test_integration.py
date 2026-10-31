@@ -108,6 +108,18 @@ def test_api_scope_and_launch_rules(client):
     sub = f"s-{uuid.uuid4().hex}"  # the hourly quota lives in Valkey, across test sessions
     client.who["v"] = Viewer(sub, "alice", namespaces=frozenset({("gl", "team-a")}))
     paths = [p["path"] for p in client.get("/api/v1/projects").json()["items"]]
+    summary = client.get("/api/v1/projects/summary").json()
+    assert summary["total"] == len(paths) and isinstance(summary["dimensions"], dict)
+    assert all(g["missing"] <= g["measured"] for g in summary["gaps"]) and len(summary["lowest"]) <= 3
+    assert [i["slug"] for i in client.get("/api/v1/instances").json()] == ["gl"]
+    client.who["v"] = Viewer(sub, "nobody")
+    assert client.get("/api/v1/instances").json() == [] and client.get("/api/v1/groups").json() == []
+    assert client.get("/api/v1/projects/summary").json()["total"] == 0
+    client.who["v"] = Viewer(sub, "alice", namespaces=frozenset({("gl", "team-a")}))
+    groups = client.get("/api/v1/groups").json()
+    assert {(g["instance"], g["path"]) for g in groups} == {("gl", "team-a"), ("gl", "team-a/sub")}
+    assert client.get("/api/v1/projects/summary?instance=gl&namespace=team-a/sub").json()["total"] == 1
+    assert client.get("/api/v1/projects/summary?instance=gl&namespace=team-a").json()["total"] == 2
     assert paths == ["team-a/app", "team-a/sub/lib"]
     hidden = client.get("/api/v1/projects/gl/team-ab/other")
     assert hidden.status_code == 404 and hidden.headers["content-type"] == "application/problem+json"
@@ -190,6 +202,9 @@ def test_scope_api(client, db, tmp_path):
     assert rows[("check", "scorecard.code_review")]["inherited"] and rows[("check", "scorecard.code_review")]["decision"] == "excluded"
     assert client.delete("/api/v1/scope/Version control?target=activity&instance=gl&project=team-a/app").status_code == 204
     assert client.get("/api/v1/projects/gl/team-a/app").json()["statuses"]["Version control"]["status"] == "implemented"
+    summary = client.get("/api/v1/projects/summary").json()
+    assert "Version control" not in [g["activity"] for g in summary["gaps"]]
+    assert [r["path"] for r in summary["lowest"]] and all(g["level"] <= 3 for g in summary["gaps"])
 
 
 async def test_dormant_projects_are_spaced_when_the_instance_asks(db):
