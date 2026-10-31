@@ -1,5 +1,6 @@
 // Shared visual vocabulary: score with its coverage, and statuses that never show "unknown" as a failure.
 import type { ActivityStatus, CheckStatus } from "../api";
+import type { CSSProperties } from "react";
 
 type IconName = "check" | "cross" | "question" | "dash" | "half";
 // One stroke icon set (24-unit grid, 2.5 stroke) instead of text glyphs, decorative next to the visible label.
@@ -59,10 +60,13 @@ export function Score({ score, coverage, size = "md" }: { score: number | null; 
   if (score == null) {
     return <span className={`score score-${size} muted`}>{coverage == null ? "Jamais analysé" : "Rien de mesuré"}</span>;
   }
+  // The number stays the message; the colour and gauge only reinforce it.
+  const band = score >= 75 ? "high" : score >= 50 ? "mid" : "low";
   return (
-    <span className={`score score-${size}`}>
+    <span className={`score score-${size} band-${band}`} style={{ "--pct": `${score}%` } as CSSProperties}>
       <strong>{Math.round(score)}</strong>
       <span className="of">/100</span>
+      <span className="gauge" aria-hidden="true" />
       <span className="coverage" title="Part des activités réellement mesurées">couverture {Math.round(coverage ?? 0)} %</span>
     </span>
   );
