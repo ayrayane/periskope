@@ -39,7 +39,8 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: periskope-scheduler }
+# The label is what the ServiceMonitor selects: without it Prometheus would never scrape the scheduler.
+metadata: { name: periskope-scheduler, labels: { app: periskope-scheduler } }
 spec:
   selector: { app: periskope-scheduler }
   ports: [{ name: http, port: 80, targetPort: http }]

@@ -36,6 +36,12 @@ spec:
           for: 10m
           labels: { severity: warning }
           annotations: { summary: "Aucun webhook de {{ "{{" }} $labels.instance {{ "}}" }} depuis 30 minutes en journée", description: "Le hook système GitLab est peut-être cassé." }
+        # A monitor that scrapes nothing would keep every alert above silent: say so.
+        - alert: PeriskopeMetricsMissing
+          expr: absent(periskope_queue_depth)
+          for: 15m
+          labels: { severity: warning }
+          annotations: { summary: "Prometheus ne reçoit plus les métriques du scheduler Periskope" }
         - alert: PeriskopeGitLabThrottled
           expr: sum by (instance) (rate(periskope_gitlab_responses_total{code="429"}[15m])) / sum by (instance) (rate(periskope_gitlab_responses_total[15m])) > 0.01
           for: 15m

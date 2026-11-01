@@ -26,3 +26,16 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content: { name: alerts, secret: { secretName: periskope-alerts } }
+  - it: labels the scheduler Service the way the ServiceMonitor selects it
+    template: scheduler.yaml
+    documentIndex: 1
+    asserts:
+      - isKind: { of: Service }
+      - equal: { path: metadata.labels.app, value: periskope-scheduler }
+  - it: selects that label from the ServiceMonitor
+    template: monitoring.yaml
+    documentIndex: 0
+    set:
+      monitoring: { enabled: true }
+    asserts:
+      - equal: { path: spec.selector.matchLabels.app, value: periskope-scheduler }
