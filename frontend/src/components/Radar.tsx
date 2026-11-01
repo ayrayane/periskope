@@ -1,4 +1,5 @@
 // Radar of DSOMM dimensions: one closed shape per series, 0 at the centre, 100 at the rim. Unmeasured axes sit at 0 and say so.
+import { dimension } from "../labels";
 type Series = { label: string; values: Record<string, number | null>; tone: "main" | "ref" };
 
 const W = 520, H = 350, C = { x: 260, y: 175 }, R = 118;
@@ -22,7 +23,7 @@ export default function Radar({ axes, series, title }: { axes: string[]; series:
   return (
     <figure className="chart radar">
       <figcaption>{title}</figcaption>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${title} : ${axes.map((d) => `${d} ${main.values[d] == null ? "non mesuré" : Math.round(main.values[d]!)}`).join(", ")}`}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${title} : ${axes.map((d) => `${dimension(d)} ${main.values[d] == null ? "non mesuré" : Math.round(main.values[d]!)}`).join(", ")}`}>
         {[25, 50, 75, 100].map((v) => <polygon key={v} className="ring" points={axes.map((_, i) => at(i, v).join(",")).join(" ")} />)}
         {axes.map((d, i) => {
           const [x, y] = at(i, 100), [lx, ly] = at(i, 118);
@@ -30,8 +31,8 @@ export default function Radar({ axes, series, title }: { axes: string[]; series:
           return (
             <g key={d}>
               <line className="spoke" x1={C.x} y1={C.y} x2={x} y2={y} />
-              <text className="axis-label" x={lx} y={ly + (ly > C.y + 8 ? 12 : ly < C.y - 8 ? -4 - (lines(d).length - 1) * 14 : 4 - (lines(d).length - 1) * 7)} textAnchor={anchor} lang="en">
-                {lines(d).map((l, k) => <tspan key={k} x={lx} dy={k ? 14 : 0}>{l}</tspan>)}
+              <text className="axis-label" x={lx} y={ly + (ly > C.y + 8 ? 12 : ly < C.y - 8 ? -4 - (lines(dimension(d)).length - 1) * 14 : 4 - (lines(dimension(d)).length - 1) * 7)} textAnchor={anchor}>
+                {lines(dimension(d)).map((l, k) => <tspan key={k} x={lx} dy={k ? 14 : 0}>{l}</tspan>)}
               </text>
             </g>
           );
@@ -42,7 +43,7 @@ export default function Radar({ axes, series, title }: { axes: string[]; series:
             {axes.map((d, i) => {
               const [x, y] = at(i, s.values[d] ?? 0);
               return <circle key={d} className="dot" cx={x} cy={y} r={s.tone === "main" ? 5 : 3.5}>
-                <title>{`${s.label} · ${d} : ${s.values[d] == null ? "non mesuré" : Math.round(s.values[d]!)}`}</title>
+                <title>{`${s.label} · ${dimension(d)} : ${s.values[d] == null ? "non mesuré" : Math.round(s.values[d]!)}`}</title>
               </circle>;
             })}
           </g>

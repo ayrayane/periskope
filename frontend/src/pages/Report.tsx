@@ -5,6 +5,7 @@ import { api, ProjectRow, Summary } from "../api";
 import { scopeQuery, HeatmapCard, TrendCard } from "../components/Pilot";
 import { useScopeData } from "../components/GroupNav";
 import { Skeleton, when } from "../components/status";
+import { dimension, practice } from "../labels";
 
 async function allProjects(qs: string): Promise<ProjectRow[]> {
   const out: ProjectRow[] = [];
@@ -32,6 +33,7 @@ export default function Report() {
   const today = new Intl.DateTimeFormat("fr-FR", { dateStyle: "long", timeStyle: "short" }).format(new Date());
 
   if (!s) return <Skeleton lines={8} label="Préparation du rapport…" />;
+  const weakest = Object.entries(s.dimensions).sort((a, b) => a[1] - b[1])[0];
   const pct = (n: number) => (s.total ? Math.round((100 * n) / s.total) : 0);
   return (
     <article className="report" aria-labelledby="report-title">
@@ -45,12 +47,17 @@ export default function Report() {
         <p className="muted">Établi par Periskope le {today}, à partir des dernières analyses de la branche de référence de chaque projet.</p>
       </header>
 
+      <p className="report-summary">
+        {s.score == null ? "Aucun projet n'a encore été analysé." : <>Score moyen de <b>{Math.round(s.score)}/100</b> sur {s.analysed} projet{s.analysed > 1 ? "s" : ""} analysé{s.analysed > 1 ? "s" : ""}, {s.below_target} sous leur niveau cible.</>}
+        {weakest && <> Dimension la plus faible : <b>{dimension(weakest[0])}</b> ({Math.round(weakest[1])}/100).</>}
+        {s.gaps[0] && <> Pratique la plus souvent manquante : <b>{practice(s.gaps[0].activity)}</b>, absente ou partielle dans {s.gaps[0].missing} projet{s.gaps[0].missing > 1 ? "s" : ""} sur {s.gaps[0].measured}.</>}
+      </p>
       <section className="report-kpis" aria-label="Chiffres clés">
         <div><b className={s.score == null ? "" : `t-${s.score >= 75 ? "pass" : s.score >= 50 ? "amber" : "fail"}`}>{s.score == null ? "—" : Math.round(s.score)}</b><span>score moyen sur 100</span></div>
         <div><b>{s.total}</b><span>projets, dont {s.analysed} analysés</span></div>
         <div><b>{s.coverage == null ? "—" : `${Math.round(s.coverage)} %`}</b><span>couverture moyenne</span></div>
-        <div><b className="t-fail">{s.below_target}</b><span>sous leur niveau cible</span></div>
-        <div><b>{s.failed}</b><span>en échec d'analyse</span></div>
+        <div><b className="t-amber">{s.below_target}</b><span>sous leur niveau cible</span></div>
+        <div><b>{s.failed}</b><span>analyses impossibles (source injoignable)</span></div>
       </section>
 
       <section className="report-block">
@@ -70,7 +77,7 @@ export default function Report() {
         <h2>Score moyen par dimension</h2>
         <table className="report-table">
           <thead><tr><th scope="col">Dimension DSOMM</th><th scope="col">Score moyen</th></tr></thead>
-          <tbody>{Object.entries(s.dimensions).sort().map(([d, v]) => <tr key={d}><td lang="en">{d}</td><td>{Math.round(v)}/100</td></tr>)}</tbody>
+          <tbody>{Object.entries(s.dimensions).sort().map(([d, v]) => <tr key={d}><td title={d}>{dimension(d)}</td><td>{Math.round(v)}/100</td></tr>)}</tbody>
         </table>
       </section>
 
@@ -79,7 +86,7 @@ export default function Report() {
         {s.gaps.length === 0 ? <p>Aucune.</p> : (
           <table className="report-table">
             <thead><tr><th scope="col">Pratique</th><th scope="col">Niveau</th><th scope="col">Projets concernés</th></tr></thead>
-            <tbody>{s.gaps.map((g) => <tr key={g.activity}><td lang="en">{g.activity}</td><td>{g.level}</td><td>{g.missing} sur {g.measured} ({Math.round((100 * g.missing) / Math.max(1, g.measured))} %)</td></tr>)}</tbody>
+            <tbody>{s.gaps.map((g) => <tr key={g.activity}><td title={g.activity}>{practice(g.activity)}</td><td>{g.level}</td><td>{g.missing} sur {g.measured} ({Math.round((100 * g.missing) / Math.max(1, g.measured))} %)</td></tr>)}</tbody>
           </table>
         )}
       </section>
@@ -100,7 +107,7 @@ export default function Report() {
                   <td>{p.score == null ? "—" : `${Math.round(p.score)}/100`}</td>
                   <td>{p.coverage == null ? "—" : `${Math.round(p.coverage)} %`}</td>
                   <td>{when(p.last_success_at)}</td>
-                  <td>{p.last_error ? `Échec : ${p.last_error}` : p.score == null ? "Jamais analysé" : "À jour"}</td>
+                  <td>{p.last_error ? `Analyse impossible : ${p.last_error}` : p.score == null ? "Jamais analysé" : "À jour"}</td>
                 </tr>
               ))}
             </tbody>

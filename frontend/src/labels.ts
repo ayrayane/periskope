@@ -1,0 +1,56 @@
+// French names of the OWASP DSOMM 5.0.2 dimensions and practices Periskope measures. The original name stays the key and the tooltip.
+const DIMENSIONS: Record<string, string> = {
+  "Build and Deployment": "Construction et déploiement",
+  "Culture and Organization": "Culture et organisation",
+  "Implementation": "Mise en œuvre",
+  "Information Gathering": "Collecte d'informations",
+  "Test and Verification": "Tests et vérification",
+};
+
+const PRACTICES: Record<string, string> = {
+  "A patch policy is defined": "Politique de correctifs définie",
+  "Automated PRs for patches": "MR automatiques de mise à jour",
+  "Defined build process": "Processus de build défini",
+  "Automated merge of automated PRs": "Merge automatique des MR de mise à jour",
+  "Environment depending configuration parameters (secrets)": "Secrets séparés par environnement",
+  "Nightly build of images (base images)": "Build nocturne des images de base",
+  "Pinning of artifacts": "Versions des dépendances épinglées",
+  "SBOM of components": "SBOM des composants",
+  "Determining the protection requirement": "Besoin de protection déterminé",
+  "Each team has a security champion": "Un référent sécurité par équipe",
+  "Security code review": "Revue de code orientée sécurité",
+  "Approval by reviewing any new version": "Chaque version approuvée par un relecteur",
+  "Context-aware output encoding": "Encodage des sorties selon le contexte",
+  "Parametrization": "Requêtes paramétrées",
+  "Simple access control for systems": "Contrôle d'accès aux systèmes",
+  "Version control": "Gestion de versions",
+  "Account inventory": "Inventaire des comptes et jetons",
+  "Least-privilege access baseline": "Moindre privilège",
+  "Require a PR before merging": "MR obligatoire avant merge",
+  "Block force pushes": "Force push bloqué",
+  "Block pushes containing secrets": "Push contenant un secret bloqué",
+  "Dismiss stale PR approvals": "Approbations remises à zéro à chaque push",
+  "Require status checks to pass": "Pipeline réussi obligatoire avant merge",
+  "Secure headers": "En-têtes HTTP de sécurité",
+  ".gitignore": "Fichier .gitignore",
+  "Local development linting & style checks performed": "Linting en développement local",
+  "Number of vulnerabilities/severity": "Vulnérabilités mesurées par sévérité",
+  "Number of vulnerabilities/severity/layer": "Vulnérabilités mesurées par couche",
+  "Patching mean time to resolution via PR": "Délai de correction des dépendances",
+  "Simple false positive treatment": "Faux positifs triés",
+  "Test for stored secrets in build artifacts": "Secrets recherchés dans les images",
+  "Test for stored secrets in code": "Secrets recherchés dans le code",
+  "Treatment of defects with high or critical severity": "Failles hautes et critiques traitées",
+  "Security unit tests for important components": "Tests unitaires de sécurité",
+  "Test the definition of virtualized environments": "Dockerfile et IaC analysés",
+  "Local development security checks performed": "Contrôles de sécurité en local (pre-commit)",
+  "Security integration tests for important components": "Tests d'intégration de sécurité",
+  "Static analysis for important server side components": "Analyse statique du code serveur",
+  "Dead code elimination": "Code mort éliminé",
+  "Exclusion of source code duplicates": "Duplication de code maîtrisée",
+  "Static analysis for all components/libraries": "Analyse statique de tout le code",
+};
+
+/** The French name, or the DSOMM one for a practice added to the referential after this table. */
+export const practice = (name: string) => PRACTICES[name] ?? name;
+export const dimension = (name: string) => DIMENSIONS[name] ?? name;

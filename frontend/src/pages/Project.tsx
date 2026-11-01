@@ -12,6 +12,7 @@ import Radar from "../components/Radar";
 import { compareBy, SortTh, StatusFilter, useSort } from "../components/TableTools";
 import { ActivityBadge, CheckBadge, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
 import { ScopeEditor } from "./Scope";
+import { dimension as dimLabel, practice } from "../labels";
 
 const TABS = [
   ["activites", "Activités"],
@@ -78,6 +79,13 @@ export default function Project() {
   if (!project.data) return <Skeleton lines={6} label="Chargement du projet…" />;
   const p = project.data;
   const gitlab = scope.instances.find((i) => i.slug === p.instance);
+  // The score in words: what is counted up to the target level, what is in place, what could not be checked.
+  const counted = (activities.data?.items ?? []).filter((a) => a.level <= p.target_level && !["not_applicable", "out_of_scope"].includes(p.statuses?.[a.name]?.status ?? "unknown"));
+  const counts = p.last_run && counted.length ? {
+    counted: counted.length,
+    done: counted.filter((a) => p.statuses?.[a.name]?.status === "implemented").length,
+    unknown: counted.filter((a) => (p.statuses?.[a.name]?.status ?? "unknown") === "unknown").length,
+  } : null;
   const tabs = TABS.filter(([key]) => key !== "cadrage" || p.can_launch);
   const asked = params.get("vue") as Tab | null;
   const tab: Tab = tabs.some(([k]) => k === asked) ? asked! : "activites";
@@ -104,6 +112,8 @@ export default function Project() {
         </div>
         <div className="head-score">
           <Score score={p.score} coverage={p.coverage} size="lg" />
+          {counts && <span className="score-sentence">{counts.done} pratique{counts.done > 1 ? "s" : ""} en place sur {counts.counted}
+            {counts.unknown > 0 && <>, {counts.unknown} non vérifiée{counts.unknown > 1 ? "s" : ""}</>}</span>}
           <span className="muted small">Comment lire ces chiffres <Help term="chiffres" label="le score et la couverture" /></span>
         </div>
       </header>
@@ -123,7 +133,7 @@ export default function Project() {
         </span>
         {launch.error && <span className="error" role="alert">{(launch.error as Error).message}</span>}
       </div>
-      {p.last_error && <p className="error">Dernière analyse en échec : {p.last_error}. Le score affiché reste celui de la dernière analyse réussie.</p>}
+      {p.last_error && <p className="banner">Dernière analyse impossible : {p.last_error}. Le score affiché reste celui de la dernière analyse réussie.</p>}
 
       {p.last_run && <NextSteps project={p} url={url} activities={activities.data?.items ?? []} checks={checks.data ?? []} onAll={() => selectTab("a-faire")} />}
 
@@ -190,7 +200,7 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
   const scoped = activities.filter((a) => !inTarget || a.level <= project.target_level);
   const count = (f: ActFilter) => scoped.filter((a) => ACT_FILTER[f].includes(statusOf(a))).length;
   const keep = (a: Activity) => (!inTarget || a.level <= project.target_level) && ACT_FILTER[show].includes(statusOf(a));
-  const order = compareBy<Activity, "name" | "level" | "status">(sort, (a, k) => (k === "name" ? a.name : k === "level" ? a.level : SEVERITY.indexOf(statusOf(a))),
+  const order = compareBy<Activity, "name" | "level" | "status">(sort, (a, k) => (k === "name" ? practice(a.name) : k === "level" ? a.level : SEVERITY.indexOf(statusOf(a))),
     (a, b) => a.level - b.level || a.name.localeCompare(b.name));
   return (
     <>
@@ -203,7 +213,7 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
           {sorted.map(([dimension, list]) => (
             <a key={dimension} href={`#${anchor(dimension)}`} className="dim-card">
               <Score score={project.by_dimension?.[dimension] ?? null} coverage={coverage(list)} size="lg" />
-              <span className="dim-name" lang="en">{dimension}</span>
+              <span className="dim-name" title={dimension}>{dimLabel(dimension)}</span>
             </a>
           ))}
         </nav>
@@ -223,7 +233,7 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
         const s = project.by_dimension?.[dimension];
         return (
           <section key={dimension} className="group" id={anchor(dimension)}>
-            <h2 lang="en">{dimension} <span className="muted small" lang="fr">{s != null ? `${Math.round(s)}/100 · couverture ${coverage(list)} %` : "rien de mesuré"}</span></h2>
+            <h2 title={dimension}>{dimLabel(dimension)} <span className="muted small">{s != null ? `${Math.round(s)}/100 · ${coverage(list) === 100 ? "tout vérifié" : `vérifiée à ${coverage(list)} %`}` : "rien de mesuré"}</span></h2>
             <div className="table-scroll">
               <table className="t-fixed t-acts">
                 <thead><tr>
@@ -238,7 +248,7 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
                     const mine = checks.filter((c) => c.activity === a.name);
                     return (
                       <tr key={a.name}>
-                        <td lang="en" className="cell-main">{a.name}</td>
+                        <td className="cell-main" title={a.name}>{practice(a.name)}</td>
                         <td className="num">{a.level}</td>
                         <td>{st ? <ActivityBadge status={st.status as ActivityStatus} toConfirm={st.to_confirm} /> : <span className="muted">Non évaluée</span>}</td>
                         <td className="small">{mine.map((c) => c.title).join(" · ")}</td>
@@ -317,8 +327,8 @@ function Todo({ url, targetLevel, checks }: { url: string; targetLevel: number; 
     <ol className="todo">
       {items.data.map((a) => (
         <li key={a.activity}>
-          <h2><span lang="en">{a.activity}</span> <span className="muted small">niveau {a.level}{a.status === "partial" ? " · partielle" : ""}</span></h2>
-          {a.blocked_by.length > 0 && <p className="muted small">Prérequis : <span lang="en">{a.blocked_by.join(", ")}</span></p>}
+          <h2><span title={a.activity}>{practice(a.activity)}</span> <span className="muted small">niveau {a.level}{a.status === "partial" ? " · partielle" : ""}</span></h2>
+          {a.blocked_by.length > 0 && <p className="muted small">Prérequis : {a.blocked_by.map(practice).join(", ")}</p>}
           <ul>
             {a.steps.map((s) => <li key={s.check}>{s.action ?? s.message}{s.action && <><br /><span className="muted small">Constat : {s.message}</span></>}<FixGuide fix={fixes[s.check]} /></li>)}
           </ul>
@@ -380,7 +390,7 @@ function NextSteps({ project, url, activities, checks, onAll }: { project: P; ur
             return (
               <li key={a.activity}>
                 <span className="next-what">{step?.action ?? a.activity}</span>
-                <span className="muted small"> · <span lang="en">{a.activity}</span>, niveau {a.level}</span>
+                <span className="muted small"> · <span title={a.activity}>{practice(a.activity)}</span>, niveau {a.level}</span>
                 {step && <FixGuide fix={fixes[step.check]} />}
               </li>
             );

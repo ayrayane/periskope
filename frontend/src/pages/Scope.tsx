@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api, Check, Me, ScopeRow } from "../api";
 import { when } from "../components/status";
+import { practice } from "../labels";
 
 type Where = { instance?: string; project?: string };
 const qs = (w: Where) => new URLSearchParams(Object.entries(w).filter(([, v]) => v) as [string, string][]).toString();
@@ -90,7 +91,7 @@ export function ScopeEditor({ where, canEdit }: { where: Where; canEdit: boolean
               {canEdit && <td><input type="checkbox" aria-label={`Sélectionner ${r.target_id}`} checked={selected.has(k(r))}
                 onChange={(e) => { const s = new Set(selected); if (e.target.checked) s.add(k(r)); else s.delete(k(r)); setSelected(s); }} /></td>}
               <td>
-                {r.target === "check" ? <>{titles[r.target_id]}<br /><span className="mono small muted">{r.target_id}</span></> : <span lang="en">{r.target_id}</span>}
+                {r.target === "check" ? <>{titles[r.target_id]}<br /><span className="mono small muted">{r.target_id}</span></> : <span title={r.target_id}>{practice(r.target_id)}</span>}
                 <span className="muted small"> · {r.target === "check" ? "preuve" : "activité"}</span>
               </td>
               <td><span className={`badge ${r.decision === "excluded" ? "tone-not_applicable" : "tone-pass"}`}>{r.decision === "excluded" ? "Écartée" : "Retenue"}</span></td>

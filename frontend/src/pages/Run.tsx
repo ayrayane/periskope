@@ -51,7 +51,7 @@ export default function Run() {
         </div>
         {done && <Score score={r.score} coverage={r.coverage} size="lg" />}
       </header>
-      {r.status === "failed" && <p className="error" role="alert">Échec : {r.error}</p>}
+      {r.status === "failed" && <p className="error" role="alert">Analyse impossible : {r.error}</p>}
       {(r.status === "queued" || r.status === "running") && <p className="empty">Analyse {r.status === "queued" ? "en file d'attente" : "en cours"} : la page se met à jour toute seule.</p>}
       {done && (
         <>

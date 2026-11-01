@@ -9,11 +9,12 @@ import { Help } from "../components/Help";
 import { ExportBar, HeatmapCard, TrendCard } from "../components/Pilot";
 import Radar from "../components/Radar";
 import { Score, Skeleton, when } from "../components/status";
+import { dimension, practice } from "../labels";
 
 type Sort = "name" | "score" | "last_run";
 const FILTERS = [
   ["below_target", "Niveau cible non atteint"],
-  ["failed", "En échec"],
+  ["failed", "Analyse impossible"],
   ["never", "Jamais analysés"],
 ] as const;
 
@@ -83,38 +84,17 @@ export default function Portfolio() {
     </button>
   );
 
-  return (
-    <div className="with-nav">
-    <GroupNav instance={instance} namespace={namespace} />
-    <section aria-labelledby="portfolio-title" className="dash-main">
-      <div className="hero">
-        <div>
-          {instance && <ScopeCrumbs instance={instance} namespace={namespace?.split("/").slice(0, -1).join("/") || undefined} instances={instances} />}
-          <div className="title-row">
-            <h1 id="portfolio-title" tabIndex={-1}>{title}</h1>
-            {gitlabUrl && <a className="gitlab-link" href={gitlabUrl} target="_blank" rel="noreferrer">Ouvrir dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
-          </div>
-          <p className="hero-sub">{instance
-            ? <>{namespace ? `Groupe ${namespace} et ses sous-groupes` : `Tous les groupes de l'instance ${inst?.name ?? instance}`}{inst && <> · <span className="mono">{new URL(inst.url).host}</span></>}. Un score de 100 veut dire que le projet atteint son niveau cible <Help term="score" label="le score" />.</>
-            : <>Toutes vos instances GitLab, analysées sur les pratiques DevSecOps (référentiel OWASP DSOMM). Choisissez une instance ou un groupe à gauche. Un score de 100 veut dire que le projet atteint son niveau cible <Help term="score" label="le score" />.</>}</p>
-        </div>
-        <div className="kpis" aria-label="Chiffres clés" role="group">
-          <div className="kpi kpi-score">
-            <Score score={s?.score ?? null} coverage={s?.coverage ?? null} size="lg" />
-            <span className="kpi-label">Score moyen <Help term="score" label="le score" /><br />{s ? `${s.analysed} projet${s.analysed > 1 ? "s" : ""} analysé${s.analysed > 1 ? "s" : ""} sur ${s.total}` : "…"}</span>
-          </div>
-          {tile("below_target", "amber", s?.below_target)}
-          {tile("failed", "fail", s?.failed)}
-          {tile("never", "unknown", s?.never)}
-        </div>
-      </div>
+  // A team member with a handful of projects comes for those: the list goes first; a lead with many comes for the cards.
+  const few = !!s && s.total <= 15;
+  const cards = (
+    <>
       {s && s.total > 0 && (
         <div className="dash">
           <section className="card watch" aria-labelledby="watch-title">
             <h2 id="watch-title">À surveiller</h2>
             <p className="card-sub">Les projets les plus loin de leur niveau cible</p>
-            {s.lowest.map((p, i) => (
-              <Link key={`${p.instance}/${p.path}`} to={`/p/${p.instance}/${p.path}`} className={`pastel pastel-${i % 3}`}>
+            {s.lowest.map((p) => (
+              <Link key={`${p.instance}/${p.path}`} to={`/p/${p.instance}/${p.path}`} className={`pastel band-${p.score >= 75 ? "high" : p.score >= 50 ? "mid" : "low"}`}>
                 <span className="pastel-title">{p.path.split("/").at(-1)}</span>
                 <span className="pastel-path">{p.path}</span>
                 <span className="pastel-foot">
@@ -132,7 +112,7 @@ export default function Portfolio() {
               <ul className="dim-list">
                 {Object.entries(s.dimensions).sort().map(([d, v]) => (
                   <li key={d}>
-                    <span className="gap-name" lang="en" title={d}>{d}</span>
+                    <span className="gap-name" title={d}>{dimension(d)}</span>
                     <span className="gap-bar" aria-hidden="true"><span style={{ width: `${v}%` }} /></span>
                     <span className="gap-pct">{Math.round(v)}</span>
                   </li>
@@ -151,7 +131,7 @@ export default function Portfolio() {
                     <li key={g.activity}>
                       <span className="gap-level" title={`Niveau ${g.level}`}>N{g.level}</span>
                       <span className="gap-body">
-                        <span className="gap-name" lang="en" title={g.activity}>{g.activity}</span>
+                        <span className="gap-name" title={g.activity}>{practice(g.activity)}</span>
                         <span className="gap-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
                         <span className="muted small">{g.missing} projet{g.missing > 1 ? "s" : ""} sur {g.measured}</span>
                       </span>
@@ -167,7 +147,11 @@ export default function Portfolio() {
           <div className="heat-area"><HeatmapCard instance={instance} namespace={namespace} instances={instances} /></div>
         </div>
       )}
-      <ExportBar instance={instance} namespace={namespace} />
+    </>
+  );
+  const myProjects = (
+    <section className="my-projects" aria-labelledby="my-projects-title">
+      <h2 id="my-projects-title">{few ? "Mes projets" : "Tous les projets du périmètre"} <span className="muted small">{s ? s.total : ""}</span></h2>
       <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="search">
           <span className="sr-only">Rechercher un projet</span>
@@ -209,7 +193,7 @@ export default function Portfolio() {
                   </div>
                   <div role="cell"><Score score={p.score} coverage={p.coverage} /></div>
                   <div role="cell" className="num-cell">{when(p.last_success_at)}</div>
-                  <div role="cell">{p.last_error ? <span className="badge tone-fail">Échec : {p.last_error}</span> : p.last_status === "running" || p.last_status === "queued" ? <span className="badge tone-running">En cours</span> : p.score == null ? <span className="muted small">Jamais analysé</span> : <span className="muted small">À jour</span>}</div>
+                  <div role="cell">{p.last_error ? <span className="badge tone-not_applicable" title="L'analyse n'a pas pu lire ses sources ; le score affiché est celui de la dernière analyse réussie.">Analyse impossible : {p.last_error}</span> : p.last_status === "running" || p.last_status === "queued" ? <span className="badge tone-running">En cours</span> : p.score == null ? <span className="muted small">Jamais analysé</span> : <span className="muted small">À jour</span>}</div>
                 </div>
               );
             })}
@@ -217,6 +201,36 @@ export default function Portfolio() {
         </div>
       </div>}
       <p className="page-status" role="status">{projects.isFetchingNextPage ? "Chargement de la suite…" : ""}</p>
+    </section>
+  );
+
+  return (
+    <div className="with-nav">
+    <GroupNav instance={instance} namespace={namespace} />
+    <section aria-labelledby="portfolio-title" className="dash-main">
+      <div className="hero">
+        <div>
+          {instance && <ScopeCrumbs instance={instance} namespace={namespace?.split("/").slice(0, -1).join("/") || undefined} instances={instances} />}
+          <div className="title-row">
+            <h1 id="portfolio-title" tabIndex={-1}>{title}</h1>
+            {gitlabUrl && <a className="gitlab-link" href={gitlabUrl} target="_blank" rel="noreferrer">Ouvrir dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
+          </div>
+          <p className="hero-sub">{instance
+            ? <>{namespace ? `Groupe ${namespace} et ses sous-groupes` : `Tous les groupes de l'instance ${inst?.name ?? instance}`}{inst && <> · <span className="mono">{new URL(inst.url).host}</span></>}. Un score de 100 veut dire que le projet atteint son niveau cible <Help term="score" label="le score" />.</>
+            : <>Toutes vos instances GitLab, analysées sur les pratiques DevSecOps (référentiel OWASP DSOMM). Choisissez une instance ou un groupe à gauche. Un score de 100 veut dire que le projet atteint son niveau cible <Help term="score" label="le score" />.</>}</p>
+        </div>
+        <ExportBar instance={instance} namespace={namespace} />
+        <div className="kpis" aria-label="Chiffres clés" role="group">
+          <div className="kpi kpi-score">
+            <Score score={s?.score ?? null} coverage={s?.coverage ?? null} size="lg" />
+            <span className="kpi-label">Score moyen <Help term="score" label="le score" /><br />{s ? `${s.analysed} projet${s.analysed > 1 ? "s" : ""} analysé${s.analysed > 1 ? "s" : ""} sur ${s.total}` : "…"}</span>
+          </div>
+          {tile("below_target", "amber", s?.below_target)}
+          {tile("failed", "neutral", s?.failed)}
+          {tile("never", "unknown", s?.never)}
+        </div>
+      </div>
+      {few ? <>{myProjects}{cards}</> : <>{cards}{myProjects}</>}
     </section>
     </div>
   );

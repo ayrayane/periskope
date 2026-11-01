@@ -86,7 +86,7 @@ export function Score({ score, coverage, size = "md" }: { score: number | null; 
 }
 
 export const RUN_LABEL: Record<string, string> = {
-  queued: "En file d'attente", running: "Analyse en cours", succeeded: "Terminée", failed: "Échec", cancelled: "Annulée",
+  queued: "En file d'attente", running: "Analyse en cours", succeeded: "Terminée", failed: "Analyse impossible", cancelled: "Annulée",
 };
 export const TRIGGER: Record<string, string> = { user: "à la demande", webhook: "push sur la branche", nightly: "revue nocturne" };
 

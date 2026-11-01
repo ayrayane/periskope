@@ -535,3 +535,16 @@ table.t-fixed { table-layout: fixed; }
 .t-acts th:nth-child(1) { width: 34%; } .t-acts th:nth-child(2) { width: 96px; } .t-acts th:nth-child(3) { width: 170px; }
 .t-checks th:nth-child(1) { width: 36%; } .t-checks th:nth-child(2) { width: 160px; }
 table.t-fixed td { overflow-wrap: anywhere; }
+
+/* v1 UX: one colour scale, neutral watch cards, readable score, technical failure in grey */
+.pastel { background: var(--card); border: 1px solid var(--line); border-left: 6px solid var(--band); }
+.pastel.band-high { --band: var(--vivid-pass); } .pastel.band-mid { --band: var(--vivid-amber); } .pastel.band-low { --band: var(--vivid-fail); }
+.kpi-neutral { --tone: var(--muted); --tone-bg: var(--na-bg); }
+.score-sentence { font-size: 0.9rem; font-weight: 600; text-align: center; max-width: 220px; }
+.heat-low { background: color-mix(in srgb, var(--vivid-fail) 30%, var(--card)); }
+.heat-mid { background: color-mix(in srgb, var(--vivid-amber) 38%, var(--card)); color: color-mix(in srgb, var(--amber) 80%, #000); }
+.heat-high { background: color-mix(in srgb, var(--vivid-pass) 32%, var(--card)); }
+.gap-name { white-space: normal; overflow: visible; }
+.trend-chart .axis { fill: var(--muted); font-size: 10px; }
+.report-summary { margin: 0; padding: 14px 18px; border-radius: 16px; background: var(--card); font-size: 1.02rem; line-height: 1.6; box-shadow: 0 2px 16px rgb(20 20 40 / 0.05); }
+@media print { .no-print { display: none !important; } .report-summary { border: 1px solid #ccc; box-shadow: none; } }

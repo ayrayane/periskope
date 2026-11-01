@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, download, Heatmap, Instance, Trend } from "../api";
 import { scopeUrl } from "./GroupNav";
+import { dimension } from "../labels";
 
 
 export const scopeQuery = (instance?: string, namespace?: string) =>
@@ -17,7 +18,7 @@ export function TrendCard({ instance, namespace }: { instance?: string; namespac
   const trend = useQuery({ queryKey: ["trend", qs], queryFn: () => api<Trend>(`/projects/trend?${qs}`), staleTime: 60_000 });
   const t = trend.data;
   const pts = t?.months ?? [];
-  const W = 320, H = 110, P = 8;
+  const W = 340, H = 124, P = 26;
   const x = (i: number) => P + (i / Math.max(1, pts.length - 1)) * (W - 2 * P);
   const y = (v: number) => P + (1 - v / 100) * (H - 2 * P);
   const line = pts.map((m, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(m.score).toFixed(1)}`).join("");
@@ -28,7 +29,9 @@ export function TrendCard({ instance, namespace }: { instance?: string; namespac
       {pts.length >= 2 ? (
         <svg viewBox={`0 0 ${W} ${H}`} className="trend-chart" role="img"
           aria-label={`Score moyen de ${Math.round(pts[0].score)} à ${Math.round(pts.at(-1)!.score)} sur ${pts.length} mois`}>
-          {[0, 50, 100].map((v) => <line key={v} className="grid" x1={P} x2={W - P} y1={y(v)} y2={y(v)} />)}
+          {[0, 50, 100].map((v) => <g key={v}><line className="grid" x1={P} x2={W - P} y1={y(v)} y2={y(v)} /><text className="axis" x={P - 4} y={y(v) + 3} textAnchor="end">{v}</text></g>)}
+          <text className="axis" x={x(0)} y={H - 1} textAnchor="start">{MONTH.format(new Date(pts[0].month))}</text>
+          <text className="axis" x={x(pts.length - 1)} y={H - 1} textAnchor="end">{MONTH.format(new Date(pts.at(-1)!.month))}</text>
           <path className="area" d={`${line}L${x(pts.length - 1)},${H - P}L${x(0)},${H - P}Z`} />
           <path className="series" d={line} />
           {pts.map((m, i) => <circle key={m.month} className="point" cx={x(i)} cy={y(m.score)} r={i === pts.length - 1 ? 4.5 : 3}>
@@ -61,10 +64,10 @@ export function HeatmapCard({ instance, namespace, instances }: { instance?: str
   return (
     <section className="card heat" aria-labelledby="heat-title">
       <h2 id="heat-title">Carte de chaleur</h2>
-      <p className="card-sub">Score moyen {!instance ? "de chaque instance GitLab" : namespace ? "de chaque sous-groupe" : "de chaque groupe"} dans chaque dimension DSOMM. Cliquez un nom pour y descendre.</p>
+      <p className="card-sub">Score moyen {!instance ? "de chaque instance GitLab" : namespace ? "de chaque sous-groupe" : "de chaque groupe"} dans chaque dimension DSOMM. <span className="no-print">Cliquez un nom pour y descendre.</span></p>
       <div className="heat-scroll">
         <table className="heat-table">
-          <thead><tr><th scope="col">{level}</th>{h.dimensions.map((d) => <th scope="col" key={d} lang="en">{d}</th>)}</tr></thead>
+          <thead><tr><th scope="col">{level}</th>{h.dimensions.map((d) => <th scope="col" key={d} title={d}>{dimension(d)}</th>)}</tr></thead>
           <tbody>
             {h.rows.map((r) => {
               const to = target(r.key);
