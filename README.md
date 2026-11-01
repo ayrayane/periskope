@@ -42,3 +42,4 @@ The chart declares its client with the operator's `KeycloakOIDCClient` (Keycloak
 - the server feature `client-admin-api:v2` (`spec.features.enabled` on the Keycloak CR);
 - a Secret `<keycloak>-admin` in the Keycloak namespace with `client-id` and `client-secret` of a master-realm service account holding the `admin` role;
 - in the realm, a default client scope with an audience mapper adding `periskope`: Keycloak never puts a client in its own token's `aud`, and the API requires it. Users get the client role `viewer`, `maintainer` or `admin`.
+- in the realm's `email` scope, the `email_verified` claim (the built-in "email verified" mapper). Periskope ties a Keycloak user to a GitLab account only through an e-mail Keycloak has verified, and the e-mails must be the same in both: a user without a verified e-mail sees no project.
