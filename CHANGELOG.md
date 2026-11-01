@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Keycloak roles are mapped to Periskope rights by configuration (`oidc.roleMap`); new `auditor` right reads every project without administering (e.g. a workspace `manager`).
+- Account matching by login for LDAP-only realms (`identity.match: username`, optionally GitLab LDAP accounts only), as an alternative to the verified e-mail.
+- Launching analyses and scoping a project follow GitLab: Maintainer or Owner of the group or project. The Keycloak `maintainer` role no longer grants it (v1 security audit).
+
 ## 1.0.0 — 2026-11-01
 
 First release announced to teams. Periskope reads several GitLab instances, measures 53 OWASP DSOMM 5.0.2 checks per project without asking teams anything, shows each user only the projects they belong to in GitLab, and says what to fix and how.

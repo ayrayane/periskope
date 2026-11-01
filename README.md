@@ -42,4 +42,24 @@ The chart declares its client with the operator's `KeycloakOIDCClient` (Keycloak
 - the server feature `client-admin-api:v2` (`spec.features.enabled` on the Keycloak CR);
 - a Secret `<keycloak>-admin` in the Keycloak namespace with `client-id` and `client-secret` of a master-realm service account holding the `admin` role;
 - in the realm, a default client scope with an audience mapper adding `periskope`: Keycloak never puts a client in its own token's `aud`, and the API requires it. Users get the client role `viewer`, `maintainer` or `admin`.
-- in the realm's `email` scope, the `email_verified` claim (the built-in "email verified" mapper). Periskope ties a Keycloak user to a GitLab account only through an e-mail Keycloak has verified, and the e-mails must be the same in both: a user without a verified e-mail sees no project.
+- a way to tie each Keycloak user to their GitLab account, chosen with `identity.match`:
+  - `verified_email` (default): the realm's `email` scope sends `email_verified` (built-in "email verified" mapper), and GitLab has the same e-mail. A user without a verified e-mail sees no project.
+  - `username`: for a realm whose accounts all come from a trusted directory (LDAP federation, no local accounts, no self-registration). The login is the person; set `identity.gitlabLdapOnly: true` when GitLab uses the same LDAP, so a local GitLab account of the same name is never taken.
+
+## Rights
+
+| Keycloak role (mapped by `oidc.roleMap`) | Sees | Launches analyses and scopes a project | Administers |
+|---|---|---|---|
+| `viewer` | the projects of their GitLab groups and projects | where GitLab makes them Maintainer or Owner | no |
+| `auditor` | every project of every instance | where GitLab makes them Maintainer or Owner | no |
+| `admin` | everything | everything | settings, organisation scoping, audit log |
+
+Example for an LDAP-backed workspace whose realm roles are `manager` and `user`:
+
+```yaml
+oidc:
+  roleMap: { manager: auditor, user: viewer }
+identity:
+  match: username
+  gitlabLdapOnly: true   # if GitLab uses the same LDAP
+```

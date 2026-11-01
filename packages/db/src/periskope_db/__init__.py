@@ -22,17 +22,19 @@ class Viewer:
     sub: str
     username: str
     admin: bool = False
+    # Reads every project of every instance without administering anything (e.g. a workspace manager role).
+    reads_all: bool = False
     # (instance, namespace path) pairs: every project under the path is visible.
     namespaces: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     # (instance, gitlab project id) pairs.
     projects: frozenset[tuple[str, int]] = field(default_factory=frozenset)
     # (instance, path) of namespaces or projects where this viewer may launch runs and override scope:
-    # all of the above for the Keycloak maintainer role, plus rights granted by hand.
+    # where GitLab makes them Maintainer or Owner, plus rights granted by hand.
     maintains: frozenset[tuple[str, str]] = field(default_factory=frozenset)
 
     def where(self, alias: str = "p", start: int = 1) -> tuple[str, list]:
         """SQL condition on a projects row restricting it to this viewer, and its parameters ($start…)."""
-        if self.admin:
+        if self.admin or self.reads_all:
             return "true", []
         ns = sorted(self.namespaces)
         pr = sorted(self.projects)

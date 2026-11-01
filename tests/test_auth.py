@@ -84,9 +84,10 @@ def test_scope_comes_from_gitlab_memberships(database_url):
     sub = f"u-{uuid.uuid4().hex}"
     v, _ = scope(database_url, {"sub": sub, "preferred_username": "alice", "email": "a@corp.test", "email_verified": True,
                                 "resource_access": {"periskope": {"roles": ["maintainer"]}}},
-                 {f"members:{sub}:gl": {"groups": ["team-a"], "projects": [["x/lib", 42]]}})
-    assert not v.admin and v.namespaces == frozenset({("gl", "team-a")})
-    assert v.projects == frozenset({("gl", 42)}) and ("gl", "team-a") in v.maintains
+                 {f"members:{sub}:gl": {"groups": ["team-a", "team-b"], "projects": [["x/lib", 42]], "maintains": ["team-a"]}})
+    assert not v.admin and not v.reads_all and v.namespaces == frozenset({("gl", "team-a"), ("gl", "team-b")})
+    # Launching follows the GitLab level, not the Keycloak role: Maintainer of team-a, a mere member of team-b.
+    assert v.projects == frozenset({("gl", 42)}) and v.maintains == frozenset({("gl", "team-a")})
 
 
 def test_unverified_email_never_reaches_gitlab(database_url):
@@ -103,3 +104,22 @@ def test_hand_granted_rights(database_url):
     sub2 = f"u-{uuid.uuid4().hex}"
     v2, _ = scope(database_url, {"sub": sub2, "preferred_username": "dan"}, permissions=[(None, "all", None, "admin")])
     assert v2.admin
+
+
+def test_workspace_roles_mapped(database_url, monkeypatch):
+    monkeypatch.setenv("PERISKOPE_ROLE_MAP", '{"manager": "auditor", "user": "viewer"}')
+    v = verifier()
+    v.role_map = {"manager": "auditor", "user": "viewer"}
+    assert v.role({"realm_access": {"roles": ["manager", "offline_access"]}}) == "auditor"
+    assert v.role({"realm_access": {"roles": ["user"]}}) == "viewer"
+    sub = f"u-{uuid.uuid4().hex}"
+
+    async def run():
+        pool = await connect(database_url)
+        await bootstrap(pool, {"gl": INSTANCE})
+        manager = await viewer(pool, Arq({}), v, {"sub": sub, "preferred_username": "marie", "realm_access": {"roles": ["manager"]}})
+        await pool.close()
+        return manager
+    manager = asyncio.run(run())
+    # A manager reads everything, administers nothing.
+    assert manager.reads_all and not manager.admin and manager.where() == ("true", [])

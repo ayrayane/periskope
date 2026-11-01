@@ -120,7 +120,7 @@ async def health() -> dict:
 
 @api.get("/me")
 async def me_(me: Me) -> dict:
-    return {"sub": me.sub, "username": me.username, "admin": me.admin,
+    return {"sub": me.sub, "username": me.username, "admin": me.admin, "reads_all": me.reads_all,
             "namespaces": sorted(f"{i}:{n}" for i, n in me.namespaces),
             "maintains": sorted(f"{i}:{n}" for i, n in me.maintains)}
 
@@ -129,7 +129,7 @@ async def me_(me: Me) -> dict:
 async def list_instances(me: Me) -> list[dict]:
     """Admins see every instance; others only the instances where they can see a project, so names and URLs do not leak."""
     rows = await state["db"].fetch("SELECT slug, name, url, enterprise, last_sync_at FROM gitlab_instances WHERE enabled ORDER BY slug")
-    if me.admin:
+    if me.admin or me.reads_all:
         return [dict(r) for r in rows]
     where, params = scoped(me, None, None)
     mine = {r["instance"] for r in await state["db"].fetch(f"SELECT DISTINCT p.instance FROM projects p WHERE {where}", *params)}
@@ -597,7 +597,7 @@ async def after_scope_change(instance: str | None, project_id: int | None) -> No
 @api.get("/scope")
 async def scope(me: Me, instance: str | None = None, project: str | None = None) -> list[dict]:
     """The scope in force for every check and activity at that level, and where each decision comes from."""
-    if instance and not me.admin and instance not in {i for i, _ in me.namespaces} | {i for i, _ in me.projects}:
+    if instance and not (me.admin or me.reads_all) and instance not in {i for i, _ in me.namespaces} | {i for i, _ in me.projects}:
         raise HTTPException(404, "instance introuvable")
     project_id = (await project_row(me, instance, project))["id"] if project and instance else None
     decisions = await scope_db.decisions_for(state["db"], instance, project_id)

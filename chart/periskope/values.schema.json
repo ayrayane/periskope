@@ -1,31 +1,110 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["instances", "image", "host", "oidc"],
+  "required": [
+    "instances",
+    "image",
+    "host",
+    "oidc"
+  ],
   "properties": {
     "instances": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["slug", "name", "url"],
+        "required": [
+          "slug",
+          "name",
+          "url"
+        ],
         "properties": {
-          "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,40}$" },
-          "name": { "type": "string" },
-          "url": { "type": "string", "pattern": "^https?://" },
-          "ratePerMin": { "type": "integer", "minimum": 1 },
-          "enterprise": { "type": "boolean" },
-          "spaceDormant": { "type": "boolean" },
-          "sonarUrl": { "type": "string" },
-          "sonarTokenSecret": { "type": "string" },
-          "trackedNamespaces": { "type": "array", "items": { "type": "string" } },
-          "excludedNamespaces": { "type": "array", "items": { "type": "string" } },
-          "tokenSecret": { "type": "string" },
-          "webhookSecret": { "type": "string" }
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,40}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https?://"
+          },
+          "ratePerMin": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "enterprise": {
+            "type": "boolean"
+          },
+          "spaceDormant": {
+            "type": "boolean"
+          },
+          "sonarUrl": {
+            "type": "string"
+          },
+          "sonarTokenSecret": {
+            "type": "string"
+          },
+          "trackedNamespaces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "excludedNamespaces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tokenSecret": {
+            "type": "string"
+          },
+          "webhookSecret": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       }
     },
-    "host": { "type": "string", "minLength": 1 },
-    "oidc": { "type": "object", "required": ["issuer", "clientId", "audience"] }
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "oidc": {
+      "type": "object",
+      "required": [
+        "issuer",
+        "clientId",
+        "audience"
+      ],
+      "properties": {
+        "roleMap": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "viewer",
+              "maintainer",
+              "auditor",
+              "admin"
+            ]
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "match": {
+          "enum": [
+            "verified_email",
+            "username"
+          ]
+        },
+        "gitlabLdapOnly": {
+          "type": "boolean"
+        }
+      }
+    }
   }
 }

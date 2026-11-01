@@ -6,7 +6,7 @@ from periskope_clients.gitlab import GitLab
 from periskope_collector.sync import memberships
 
 USERS = [
-    {"username": "alice", "email": "alice@corp.test", "state": "active", "bot": False},
+    {"username": "alice", "email": "alice@corp.test", "state": "active", "bot": False, "identities": [{"provider": "ldapmain", "extern_uid": "uid=alice"}]},
     {"username": "bob", "email": "bob@other.test", "state": "active", "bot": False},
     {"username": "bob-corp", "email": "bob@corp.test", "state": "active", "bot": False},
     {"username": "carol", "email": "carol@corp.test", "state": "blocked", "bot": False},
@@ -27,7 +27,8 @@ def gitlab(tmp_path):
         user = json.loads(request.content)["variables"]["username"]
         return httpx.Response(200, json={"data": {"user": {
             "groupMemberships": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [
-                node(30, group={"fullPath": f"team-{user}"}), node(5, group={"fullPath": "minimal-only"})]},
+                node(30, group={"fullPath": f"team-{user}"}), node(5, group={"fullPath": "minimal-only"}),
+                *([node(40, group={"fullPath": "lead-lea"})] if user == "lea" else [])]},
             "projectMemberships": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [
                 node(10, project={"fullPath": "x/guest", "id": "gid://gitlab/Project/42"})]}}}})
     token = tmp_path / "t"
@@ -63,3 +64,22 @@ async def test_gitlab_account_without_email_is_never_matched_on_login_alone(tmp_
         assert await memberships(gitlab(tmp_path), "erin", "erin@corp.test") is None
     finally:
         USERS.pop()
+
+
+async def test_trusted_directory_matches_on_login(tmp_path):
+    # Keycloak accounts all come from the LDAP: the login is the person, no e-mail needed.
+    found = await memberships(gitlab(tmp_path), "alice", None, match="username")
+    assert found["groups"] == ["team-alice"] and found["maintains"] == []
+    # Only GitLab accounts tied to the LDAP when asked: bob is a local GitLab account.
+    assert await memberships(gitlab(tmp_path), "bob", None, match="username", ldap_only=True) is None
+    assert (await memberships(gitlab(tmp_path), "alice", None, match="username", ldap_only=True))["groups"] == ["team-alice"]
+    assert await memberships(gitlab(tmp_path), "carol", None, match="username") is None  # blocked
+
+
+async def test_maintainer_level_comes_from_gitlab(tmp_path):
+    USERS.append({"username": "lea", "email": "lea@corp.test", "state": "active", "bot": False})
+    try:
+        found = await memberships(gitlab(tmp_path), "lea", None, match="username")
+    finally:
+        USERS.pop()
+    assert found["groups"] == ["lead-lea", "team-lea"] and found["maintains"] == ["lead-lea"]

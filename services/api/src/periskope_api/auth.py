@@ -6,6 +6,7 @@ import json
 import ssl
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import ClassVar
 
 import asyncpg
 import jwt
@@ -14,7 +15,8 @@ from fastapi import HTTPException
 from periskope_core.settings import env, queue
 from periskope_db import Viewer
 
-ROLES = ("viewer", "maintainer", "admin")
+# Lowest to highest. "auditor" reads every project without administering; "maintainer" is kept for old realms (same as viewer).
+ROLES = ("viewer", "maintainer", "auditor", "admin")
 MEMBERSHIP_WAIT_S = 2.0
 
 
@@ -30,8 +32,11 @@ class Settings:
 
 
 class Verifier:
+    role_map: ClassVar[dict[str, str]] = {}  # replaced per instance from PERISKOPE_ROLE_MAP
+
     def __init__(self, settings: Settings, ca_file: str | None = None):
         self.settings = settings
+        self.role_map = json.loads(env("ROLE_MAP", "{}"))
         # JWKS cached 5 minutes; a new signing key triggers a refetch.
         ctx = ssl.create_default_context(cafile=ca_file) if ca_file else None
         self.jwks = jwt.PyJWKClient(f"{settings.issuer}/protocol/openid-connect/certs", cache_jwk_set=True, lifespan=300, ssl_context=ctx)
@@ -51,9 +56,11 @@ class Verifier:
         return claims
 
     def role(self, claims: dict) -> str:
+        """Client and realm roles, translated by PERISKOPE_ROLE_MAP (e.g. {"manager": "auditor", "user": "viewer"}), highest wins."""
         roles = set((claims.get("resource_access", {}).get(self.settings.client_id) or {}).get("roles", []))
         roles |= set(claims.get("realm_access", {}).get("roles", []))
-        return next((r for r in reversed(ROLES) if r in roles or f"periskope-{r}" in roles), "viewer")
+        mapped = {self.role_map.get(r, r.removeprefix("periskope-")) for r in roles}
+        return next((r for r in reversed(ROLES) if r in mapped), "viewer")
 
 
 async def viewer(db: asyncpg.Pool, arq: ArqRedis, verifier: Verifier, claims: dict) -> Viewer:
@@ -71,13 +78,13 @@ async def viewer(db: asyncpg.Pool, arq: ArqRedis, verifier: Verifier, claims: di
         return Viewer(sub, username, admin=True)
     namespaces: set[tuple[str, str]] = set()
     projects: set[tuple[str, int]] = set()
-    project_paths: set[tuple[str, str]] = set()
+    maintains: set[tuple[str, str]] = set()
     slugs = [r["slug"] for r in await db.fetch("SELECT slug FROM gitlab_instances WHERE enabled")]
     for slug, found in zip(slugs, await asyncio.gather(*(membership(arq, sub, username, email, s) for s in slugs))):
         namespaces |= {(slug, g) for g in found.get("groups", [])}
         projects |= {(slug, pid) for _, pid in found.get("projects", [])}
-        project_paths |= {(slug, path) for path, _ in found.get("projects", [])}
-    maintains = namespaces | project_paths if role == "maintainer" else set()
+        # Launching and scoping follow GitLab: Maintainer or Owner of the group or project, whatever the Keycloak role.
+        maintains |= {(slug, path) for path in found.get("maintains", [])}
     for g in await db.fetch("SELECT instance, scope_kind, scope_value, role FROM permissions WHERE subject = $1", sub):
         target = {(i, g["scope_value"] or "") for i in ([g["instance"]] if g["instance"] else slugs)}
         if g["scope_kind"] in ("namespace", "project"):
@@ -86,7 +93,8 @@ async def viewer(db: asyncpg.Pool, arq: ArqRedis, verifier: Verifier, claims: di
                 maintains |= target
         elif g["scope_kind"] == "all" and g["role"] == "admin" and g["instance"] is None:
             return Viewer(sub, username, admin=True)
-    return Viewer(sub, username, namespaces=frozenset(namespaces), projects=frozenset(projects), maintains=frozenset(maintains))
+    return Viewer(sub, username, reads_all=role == "auditor", namespaces=frozenset(namespaces), projects=frozenset(projects),
+                  maintains=frozenset(maintains))
 
 
 async def membership(arq: ArqRedis, sub: str, username: str, email: str | None, instance: str) -> dict:

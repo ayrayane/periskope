@@ -65,12 +65,16 @@ def _ts(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
-GUEST = 10
+GUEST, MAINTAINER = 10, 40
+
+
+def level(node: dict[str, Any]) -> int:
+    return (node.get("accessLevel") or {}).get("integerValue") or 0
 
 
 def seen(node: dict[str, Any]) -> bool:
     """Minimal access (5) does not show the group's projects in GitLab, so not in Periskope either."""
-    return ((node.get("accessLevel") or {}).get("integerValue") or 0) >= GUEST
+    return level(node) >= GUEST
 
 
 MEMBERSHIPS = """
@@ -83,9 +87,16 @@ query($username: String!, $groups: String, $projects: String) {
 """
 
 
-async def gitlab_user(gl: GitLab, username: str, email: str | None) -> dict[str, Any] | None:
+async def gitlab_user(gl: GitLab, username: str, email: str | None, match: str = "verified_email", ldap_only: bool = False) -> dict[str, Any] | None:
     """The GitLab account of a Keycloak user, or None. The e-mail, verified by Keycloak, is what ties the two: a login alone
     never does, since anyone may pick a login. Blocked, deactivated and bot accounts see nothing."""
+    if match == "username":
+        # Trusted directory (every Keycloak account comes from the LDAP): the login is the person. Optionally only
+        # GitLab accounts tied to the LDAP, so a local GitLab account of the same name never stands in.
+        found = [u for u in await gl.get("/users", username=username) or [] if u["username"].lower() == username.lower()
+                 and (not ldap_only or any(str(i.get("provider", "")).startswith("ldap") for i in u.get("identities") or []))]
+        user = found[0] if len(found) == 1 else None
+        return user if user and user.get("state") == "active" and not user.get("bot") else None
     if not email:
         return None
 
@@ -103,15 +114,16 @@ async def gitlab_user(gl: GitLab, username: str, email: str | None) -> dict[str,
     return user if user.get("state") == "active" and not user.get("bot") else None
 
 
-async def memberships(gl: GitLab, username: str, email: str | None) -> dict[str, list] | None:
-    """Groups and projects the user belongs to on this instance; None when they have no usable account there."""
-    user = await gitlab_user(gl, username, email)
+async def memberships(gl: GitLab, username: str, email: str | None, match: str = "verified_email", ldap_only: bool = False) -> dict[str, list] | None:
+    """Groups and projects the user belongs to on this instance, and where they are Maintainer or above; None without a usable account."""
+    user = await gitlab_user(gl, username, email, match, ldap_only)
     if user is None:
         return None
     username = user["username"]
     # A finished connection restarts from its first page while the other continues: sets absorb the repeats.
     groups: set[str] = set()
     projects: dict[str, int] = {}
+    maintained: set[str] = set()
     cursors: dict[str, str | None] = {"groups": None, "projects": None}
     for _ in range(20):
         data = await gl.graphql(MEMBERSHIPS, username=username, **cursors)
@@ -121,8 +133,10 @@ async def memberships(gl: GitLab, username: str, email: str | None) -> dict[str,
         g, p = user["groupMemberships"], user["projectMemberships"]
         groups.update(n["group"]["fullPath"] for n in g["nodes"] if n.get("group") and seen(n))
         projects.update((n["project"]["fullPath"], int(n["project"]["id"].rsplit("/", 1)[-1])) for n in p["nodes"] if n.get("project") and seen(n))
+        maintained.update(n["group"]["fullPath"] for n in g["nodes"] if n.get("group") and level(n) >= MAINTAINER)
+        maintained.update(n["project"]["fullPath"] for n in p["nodes"] if n.get("project") and level(n) >= MAINTAINER)
         cursors = {"groups": g["pageInfo"]["endCursor"] if g["pageInfo"]["hasNextPage"] else None,
                    "projects": p["pageInfo"]["endCursor"] if p["pageInfo"]["hasNextPage"] else None}
         if not any(cursors.values()):
             break
-    return {"groups": sorted(groups), "projects": sorted(projects.items()), "at": datetime.now(UTC).isoformat()}
+    return {"groups": sorted(groups), "projects": sorted(projects.items()), "maintains": sorted(maintained), "at": datetime.now(UTC).isoformat()}

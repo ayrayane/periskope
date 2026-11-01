@@ -40,6 +40,18 @@ oidc:
   audience: periskope
   # ConfigMap with a ca.crt when Keycloak or GitLab use a private CA.
   caConfigMap: ""
+  # Keycloak role (realm or client) -> Periskope right: viewer (GitLab membership), auditor (reads every project, administers
+  # nothing), admin. Unmapped roles named viewer/auditor/admin or periskope-<right> are taken as is.
+  # Example for an LDAP-backed workspace: { manager: auditor, user: viewer }
+  roleMap: {}
+
+# How a Keycloak user is tied to their GitLab account on each instance.
+identity:
+  # verified_email: the e-mail, when Keycloak marks it verified and GitLab has the same one.
+  # username: the login, for a realm whose accounts all come from a trusted directory (LDAP), with no local accounts.
+  match: verified_email
+  # With match=username, accept only GitLab accounts linked to the LDAP (never a local GitLab account of the same name).
+  gitlabLdapOnly: false
 
 # OIDC client declared through the Keycloak operator (26.8+ KeycloakOIDCClient).
 keycloakClient:

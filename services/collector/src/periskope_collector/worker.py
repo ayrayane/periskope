@@ -65,7 +65,8 @@ async def run_sync(ctx: dict[str, Any]) -> dict[str, int]:
 
 
 async def resolve_memberships(ctx: dict[str, Any], sub: str, username: str, email: str | None) -> None:
-    found = await memberships(ctx["gl"], username, email)
+    found = await memberships(ctx["gl"], username, email, match=env("IDENTITY_MATCH", "verified_email"),
+                              ldap_only=env("GITLAB_LDAP_ONLY", "false") == "true")
     value = found or {"groups": [], "projects": []}
     await ctx["redis"].set(f"members:{sub}:{ctx['instance'].slug}", json.dumps(value), ex=MEMBERSHIP_TTL_S)
 
