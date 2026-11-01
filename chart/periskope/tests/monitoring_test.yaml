@@ -1,5 +1,5 @@
 suite: monitoring and alerts
-templates: [monitoring.yaml, scheduler.yaml]
+templates: [monitoring.yaml, scheduler.yaml, config.yaml]
 set:
   host: periskope.test
   instances:
