@@ -58,7 +58,9 @@ class Verifier:
 
 async def viewer(db: asyncpg.Pool, arq: ArqRedis, verifier: Verifier, claims: dict) -> Viewer:
     """The sub is the key, never the login. Visibility is GitLab membership, cached 15 min by the collectors."""
-    sub, username, email = claims["sub"], claims.get("preferred_username") or claims["sub"], claims.get("email")
+    sub, username = claims["sub"], claims.get("preferred_username") or claims["sub"]
+    # An e-mail Keycloak has not verified could be anyone's: it never selects a GitLab account.
+    email = claims.get("email") if claims.get("email_verified") is True else None
     role = verifier.role(claims)
     await db.execute(
         "INSERT INTO users (sub, username, email, roles, groups, last_login) VALUES ($1, $2, $3, $4, $5, now())"

@@ -23,7 +23,7 @@ def gitlab(tmp_path):
             q = request.url.params
             if "username" in q:
                 return httpx.Response(200, json=[u for u in USERS if u["username"] == q["username"]])
-            return httpx.Response(200, json=[u for u in USERS if q["search"] in u["email"]])
+            return httpx.Response(200, json=[u for u in USERS if q["search"] in u.get("email", "")])
         user = json.loads(request.content)["variables"]["username"]
         return httpx.Response(200, json={"data": {"user": {
             "groupMemberships": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [
@@ -50,3 +50,16 @@ async def test_same_login_other_email_is_another_person(tmp_path):
 async def test_blocked_or_unknown_sees_nothing(tmp_path):
     assert await memberships(gitlab(tmp_path), "carol", "carol@corp.test") is None
     assert await memberships(gitlab(tmp_path), "dave", "dave@corp.test") is None
+
+
+async def test_no_verified_email_matches_nobody(tmp_path):
+    # Seen in the v1 audit: without a verified e-mail, the login alone would pick the GitLab account of the same name.
+    assert await memberships(gitlab(tmp_path), "alice", None) is None
+
+
+async def test_gitlab_account_without_email_is_never_matched_on_login_alone(tmp_path):
+    USERS.append({"username": "erin", "state": "active", "bot": False})
+    try:
+        assert await memberships(gitlab(tmp_path), "erin", "erin@corp.test") is None
+    finally:
+        USERS.pop()

@@ -84,14 +84,17 @@ query($username: String!, $groups: String, $projects: String) {
 
 
 async def gitlab_user(gl: GitLab, username: str, email: str | None) -> dict[str, Any] | None:
-    """The GitLab account of a Keycloak user, or None. A same login with another e-mail is another person: never matched.
-    Blocked, deactivated and bot accounts see nothing."""
+    """The GitLab account of a Keycloak user, or None. The e-mail, verified by Keycloak, is what ties the two: a login alone
+    never does, since anyone may pick a login. Blocked, deactivated and bot accounts see nothing."""
+    if not email:
+        return None
+
     def same_person(u: dict[str, Any]) -> bool:
         known = u.get("email") or u.get("public_email")
-        return not (email and known) or known.lower() == email.lower()
+        return bool(known) and known.lower() == email.lower()
 
     found = [u for u in await gl.get("/users", username=username) or [] if u["username"].lower() == username.lower() and same_person(u)]
-    if not found and email:
+    if not found:
         # Login names may differ between Keycloak and GitLab: fall back on the exact e-mail.
         found = [u for u in await gl.get("/users", search=email) or [] if (u.get("email") or "").lower() == email.lower()]
     if len(found) != 1:
