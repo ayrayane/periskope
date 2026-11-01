@@ -339,3 +339,81 @@ def test_scheduler_metrics(database_url):
     assert 'periskope_last_webhook_age_seconds{instance="gl"}' in text
     for name in ("periskope_failed_ratio_last_hour", "periskope_reused_ratio_last_day", "periskope_runs_last_hour", "periskope_overdue_projects"):
         assert f"# TYPE {name} gauge" in text
+
+
+def test_other_team_reaches_nothing(client, db, tmp_path):
+    """v1 audit: every route, not only the list, must hide a sibling team's project (team-ab vs team-a) behind a 404."""
+    import asyncio
+
+    from periskope_collector.analysis import analyse
+
+    async def analysed(gitlab_id):
+        pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
+        project_id = await pool.fetchval("SELECT id FROM projects WHERE gitlab_id = $1", gitlab_id)
+        run = await runs.create(pool, project_id, "main", "user", "x")
+        ctx = context(good(), tmp_path)
+        await analyse(pool, ctx.gl, run, enterprise=True, sonar=ctx.sonar)
+        await pool.close()
+        return run
+    theirs, mine = asyncio.run(analysed(9)), asyncio.run(analysed(7))   # team-ab/other, team-a/app
+
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}), maintains=frozenset({("gl", "team-a")}))
+    for url in (f"/api/v1/runs/{theirs}", f"/api/v1/runs/{theirs}/evidence", f"/api/v1/runs/{theirs}/diff",
+                f"/api/v1/runs/{mine}/diff?against={theirs}", "/api/v1/projects/gl/team-ab/other/roadmap",
+                "/api/v1/projects/gl/team-ab/other/runs", "/api/v1/projects/gl/team-ab/other/branches",
+                "/api/v1/scope?instance=gl&project=team-ab/other"):
+        assert client.get(url).status_code == 404, url
+    assert client.patch("/api/v1/projects/gl/team-ab/other", json={"target_level": 1}).status_code == 404
+    # Cancelling is for admins: the same 403 for any id, so it reveals nothing about another team's runs.
+    assert client.delete(f"/api/v1/runs/{theirs}").status_code == client.delete("/api/v1/runs/999999").status_code == 403
+    item = {"target": "check", "target_id": "repo.gitignore", "decision": "excluded", "reason": "test de cloisonnement"}
+    assert client.put("/api/v1/scope", json={"instance": "gl", "project": "team-ab/other", "items": [item]}).status_code == 404
+
+    # The aggregates, seen from the sibling team: only its own project.
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "bob", namespaces=frozenset({("gl", "team-ab")}))
+    rows = client.get("/api/v1/projects/export.csv?detail=true").text
+    assert "team-ab/other" in rows and "team-a/app" not in rows
+    assert [r["key"] for r in client.get("/api/v1/groups/heatmap?instance=gl").json()["rows"]] == ["team-ab"]
+    assert client.get("/api/v1/projects/summary").json()["total"] == 1
+
+    # A project no longer tracked stays out of reach, its analyses included.
+    async def disable():
+        pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
+        await pool.execute("UPDATE projects SET enabled = false WHERE gitlab_id = 7")
+        await pool.close()
+    asyncio.run(disable())
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}))
+    assert client.get(f"/api/v1/runs/{mine}").status_code == 404
+
+
+def test_small_leaks_closed(client, db):
+    import asyncio
+    assert client.get("/api/v1/health").json() == {"status": "ok"}
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}))
+    assert client.get("/api/v1/scope?instance=gl").status_code == 200
+    assert client.get("/api/v1/scope?instance=elsewhere").status_code == 404
+
+    async def drift():
+        pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
+        pid = await pool.fetchval("SELECT id FROM projects WHERE gitlab_id = 7")
+        await pool.execute("INSERT INTO project_state (project_id, score, statuses) VALUES ($1, 40, $2)"
+                           " ON CONFLICT (project_id) DO UPDATE SET statuses = $2",
+                           pid, {"Version control": {"status": "implemented"}, "Pratique retirée du référentiel": {"status": "partial"}})
+        await pool.close()
+    asyncio.run(drift())
+    for detail in ("false", "true"):
+        text = client.get(f"/api/v1/projects/export.csv?detail={detail}").text
+        assert "team-a/app" in text and "retirée" not in text
+
+
+def test_empty_webhook_secret_accepts_nothing(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from periskope_scheduler import app as scheduler
+
+    (tmp_path / "gitlab-webhook-gl").mkdir()
+    (tmp_path / "gitlab-webhook-gl" / "token").write_text("")
+    monkeypatch.setenv("PERISKOPE_SECRETS_DIR", str(tmp_path))
+    scheduler.state["instances"] = {"gl": INSTANCE}
+    hook = TestClient(scheduler.app)  # no lifespan: the check happens before any database or queue access
+    assert hook.post("/hooks/gitlab/gl", json={"object_kind": "push"}).status_code == 401
+    assert hook.post("/hooks/gitlab/gl", json={"object_kind": "push"}, headers={"X-Gitlab-Token": ""}).status_code == 401

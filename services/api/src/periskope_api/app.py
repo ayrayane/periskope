@@ -114,9 +114,8 @@ async def project_row(me: Viewer, instance: str, path: str) -> dict:
 async def health() -> dict:
     await state["db"].fetchval("SELECT 1")
     await state["arq"].ping()
-    instances = await state["db"].fetch("SELECT slug, last_sync_at FROM gitlab_instances WHERE enabled ORDER BY slug")
-    return {"status": "ok", "instances": [{"slug": i["slug"], "last_sync_at": i["last_sync_at"],
-                                           "queued": await state["arq"].zcard(queue(i["slug"]))} for i in instances]}
+    # Anonymous: says the service is up and nothing else (instance names and queues are in the admin view).
+    return {"status": "ok"}
 
 
 @api.get("/me")
@@ -305,15 +304,14 @@ def cell(value: Any) -> str:
 async def export_csv(me: Me, instance: str | None = None, namespace: str | None = None, detail: bool = False) -> StreamingResponse:
     """The scope as a spreadsheet: one row per project, or with detail one row per project and practice with its evidence."""
     where, params = scoped(me, instance, namespace)
-    rows = await state["db"].fetch(
-        "SELECT p.instance, p.namespace_path, p.path, p.target_level, s.score, s.coverage, s.last_success_at, s.last_error, s.statuses, r.results"
-        " FROM projects p LEFT JOIN project_state s ON s.project_id = p.id LEFT JOIN runs r ON r.id = s.last_run_id"
-        f" WHERE {where} ORDER BY p.instance, p.path", *params)
+    sql = ("SELECT p.instance, p.namespace_path, p.path, p.target_level, s.score, s.coverage, s.last_success_at, s.last_error, s.statuses"
+           + (", r.results" if detail else "") + " FROM projects p LEFT JOIN project_state s ON s.project_id = p.id"
+           + (" LEFT JOIN runs r ON r.id = s.last_run_id" if detail else "") + f" WHERE {where} ORDER BY p.instance, p.path")
     by_activity: dict[str, list] = {}
     for c in CHECKS:
         by_activity.setdefault(c.activity, []).append(c)
 
-    def lines():
+    async def lines():
         buf = io.StringIO()
         w = csv.writer(buf, delimiter=";")
         buf.write("\ufeff")  # Excel reads UTF-8 only with a BOM
@@ -325,25 +323,28 @@ async def export_csv(me: Me, instance: str | None = None, namespace: str | None 
         yield buf.getvalue()
         buf.seek(0)
         buf.truncate()
-        for r in rows:
-            statuses = r["statuses"] or {}
-            if not detail:
-                counts = {k: sum(1 for name, v in statuses.items() if v.get("status") == k and ACTIVITIES[name].level <= r["target_level"])
-                          for k in ("implemented", "partial", "not_implemented", "unknown")}
-                w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], r["target_level"],
-                            None if r["score"] is None else round(r["score"], 1), None if r["coverage"] is None else round(r["coverage"], 1),
-                            r["last_success_at"].isoformat() if r["last_success_at"] else None, r["last_error"],
-                            counts["implemented"], counts["partial"], counts["not_implemented"], counts["unknown"])])
-            else:
-                results = r["results"] or {}
-                for name, v in sorted(statuses.items()):
-                    a = ACTIVITIES[name]
-                    proof = " | ".join(f"{c.title} : {results[c.id].get('message', '')}" for c in by_activity.get(name, []) if c.id in results)
-                    w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], a.dimension, name, a.level,
-                                "oui" if a.level <= r["target_level"] else "non", STATUS_FR.get(v.get("status"), v.get("status")), proof)])
-            yield buf.getvalue()
-            buf.seek(0)
-            buf.truncate()
+        # A server-side cursor: the whole scope never sits in memory at once.
+        async with state["db"].acquire() as conn, conn.transaction():
+            async for r in conn.cursor(sql, *params, prefetch=200):
+                # Practices the current referential no longer has (until re-analysis after an upgrade) are left out.
+                statuses = {name: v for name, v in (r["statuses"] or {}).items() if name in ACTIVITIES}
+                if not detail:
+                    counts = {k: sum(1 for name, v in statuses.items() if v.get("status") == k and ACTIVITIES[name].level <= r["target_level"])
+                              for k in ("implemented", "partial", "not_implemented", "unknown")}
+                    w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], r["target_level"],
+                                None if r["score"] is None else round(r["score"], 1), None if r["coverage"] is None else round(r["coverage"], 1),
+                                r["last_success_at"].isoformat() if r["last_success_at"] else None, r["last_error"],
+                                counts["implemented"], counts["partial"], counts["not_implemented"], counts["unknown"])])
+                else:
+                    results = r["results"] or {}
+                    for name, v in sorted(statuses.items()):
+                        a = ACTIVITIES[name]
+                        proof = " | ".join(f"{c.title} : {results[c.id].get('message', '')}" for c in by_activity.get(name, []) if c.id in results)
+                        w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], a.dimension, name, a.level,
+                                    "oui" if a.level <= r["target_level"] else "non", STATUS_FR.get(v.get("status"), v.get("status")), proof)])
+                yield buf.getvalue()
+                buf.seek(0)
+                buf.truncate()
 
     name = "periskope-" + "-".join(x for x in (instance, namespace, "detail" if detail else "projets") if x) + ".csv"
     name = re.sub(r"[^A-Za-z0-9._-]", "_", name)  # query text never reaches the header as is
@@ -480,7 +481,9 @@ async def patch_project(instance: str, path: str, body: ProjectPatch, me: Me) ->
 async def run_row(me: Viewer, run_id: int) -> dict:
     where, params = me.where("p", 2)
     row = await state["db"].fetchrow(
-        f"SELECT r.*, p.instance, p.path, p.default_branch FROM runs r JOIN projects p ON p.id = r.project_id WHERE r.id = $1 AND {where}",
+        # Same rule as a project: once no longer tracked, its analyses are out of reach too (admins excepted).
+        f"SELECT r.*, p.instance, p.path, p.default_branch FROM runs r JOIN projects p ON p.id = r.project_id WHERE r.id = $1 AND {where}"
+        f"{'' if me.admin else ' AND p.enabled'}",
         run_id, *params)
     if row is None:
         raise HTTPException(404, "analyse introuvable")
@@ -594,6 +597,8 @@ async def after_scope_change(instance: str | None, project_id: int | None) -> No
 @api.get("/scope")
 async def scope(me: Me, instance: str | None = None, project: str | None = None) -> list[dict]:
     """The scope in force for every check and activity at that level, and where each decision comes from."""
+    if instance and not me.admin and instance not in {i for i, _ in me.namespaces} | {i for i, _ in me.projects}:
+        raise HTTPException(404, "instance introuvable")
     project_id = (await project_row(me, instance, project))["id"] if project and instance else None
     decisions = await scope_db.decisions_for(state["db"], instance, project_id)
     rows = {(r["target"], r["target_id"], r["instance"], r["project_id"]): r for r in await state["db"].fetch(

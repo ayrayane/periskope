@@ -55,7 +55,9 @@ def webhook_secret(instance: str) -> str:
 async def gitlab_hook(instance: str, request: Request, x_gitlab_token: str = Header("")) -> dict:
     if instance not in state["instances"]:
         raise HTTPException(404)
-    if not hmac.compare_digest(x_gitlab_token.encode(), webhook_secret(instance).encode()):
+    expected = webhook_secret(instance)
+    # An empty secret file must not accept requests that send no token at all.
+    if not expected or not hmac.compare_digest(x_gitlab_token.encode(), expected.encode()):
         raise HTTPException(401)
     event = await request.json()
     arq: ArqRedis = state["arq"]
