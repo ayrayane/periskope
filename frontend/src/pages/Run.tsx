@@ -1,6 +1,7 @@
 // One analysis: its results, a banner when it is not the reference branch, and what changed against the reference or the previous run.
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { StatusFilter } from "../components/TableTools";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, Check, Diff, RunDetail } from "../api";
 import FixGuide from "../components/FixGuide";
@@ -9,6 +10,7 @@ import { CheckBadge, RUN_LABEL as LABEL, Score, Skeleton, when } from "../compon
 export default function Run() {
   const { id = "" } = useParams();
   const [startedAt] = useState(Date.now());
+  const [show, setShow] = useState<"all" | "fail" | "unknown" | "pass">("all");
   const run = useQuery({
     queryKey: ["run-detail", id],
     queryFn: () => api<RunDetail>(`/runs/${id}`),
@@ -25,6 +27,7 @@ export default function Run() {
   if (run.isError) return <p className="error" role="alert">{(run.error as ApiError).status === 404 ? "Analyse introuvable." : (run.error as Error).message}</p>;
   if (!run.data) return <Skeleton lines={6} label="Chargement de l'analyse…" />;
   const r = run.data;
+  const listed = (checks.data ?? []).filter((c) => r.results?.[c.id]);
   const reference = r.branch === r.default_branch;
   const done = r.status === "succeeded";
 
@@ -56,18 +59,26 @@ export default function Run() {
             title={reference ? "Changements depuis l'analyse précédente" : "Comparaison avec la branche de référence"} />
           <section className="group">
             <h2>Preuves</h2>
-            <table>
+            <div className="table-tools">
+              <StatusFilter label="Filtrer les preuves par résultat" value={show} onChange={setShow} options={[
+                { value: "all", label: "Toutes", count: listed.length },
+                { value: "fail", label: "À corriger", count: listed.filter((c) => r.results![c.id].status === "fail").length, tone: "fail" },
+                { value: "unknown", label: "Indéterminées", count: listed.filter((c) => r.results![c.id].status === "unknown").length, tone: "unknown" },
+                { value: "pass", label: "Validées", count: listed.filter((c) => r.results![c.id].status === "pass").length, tone: "pass" },
+              ]} />
+            </div>
+            <div className="table-scroll"><table>
               <thead><tr><th scope="col">Preuve</th><th scope="col">Statut</th><th scope="col">Constat</th></tr></thead>
               <tbody>
-                {(checks.data ?? []).filter((c) => r.results?.[c.id]).map((c) => (
+                {listed.filter((c) => show === "all" || r.results![c.id].status === show).map((c) => (
                   <tr key={c.id}>
-                    <td title={c.id}>{c.title}</td>
+                    <td title={c.id} className="cell-main">{c.title}</td>
                     <td><CheckBadge status={r.results![c.id].status} /></td>
                     <td>{r.results![c.id].message}{!["pass", "not_applicable"].includes(r.results![c.id].status) && <FixGuide fix={c.fix} />}</td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </section>
         </>
       )}

@@ -9,6 +9,7 @@ import FixGuide from "../components/FixGuide";
 import GroupNav, { ScopeCrumbs, useScopeData } from "../components/GroupNav";
 import { Help } from "../components/Help";
 import Radar from "../components/Radar";
+import { compareBy, SortTh, StatusFilter, useSort } from "../components/TableTools";
 import { ActivityBadge, CheckBadge, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
 import { ScopeEditor } from "./Scope";
 
@@ -22,6 +23,14 @@ const TABS = [
 type Tab = (typeof TABS)[number][0];
 const SOURCE: Record<string, string> = { "API projet": "GitLab", "Dépôt": "Dépôt", SonarQube: "SonarQube", Scorecard: "Scorecard" };
 const ACTIVE = ["queued", "running"];
+// Most urgent first when sorting by state.
+const SEVERITY: ActivityStatus[] = ["not_implemented", "partial", "unknown", "implemented", "not_applicable", "out_of_scope"];
+type ActFilter = "all" | "todo" | "unknown" | "done";
+const ACT_FILTER: Record<ActFilter, ActivityStatus[]> = {
+  all: SEVERITY, todo: ["not_implemented", "partial"], unknown: ["unknown"], done: ["implemented"],
+};
+type CheckFilter = "all" | "fail" | "unknown" | "pass" | "other";
+const CHECK_ORDER: CheckFilter[] = ["fail", "unknown", "pass", "other"];
 
 export default function Project() {
   const { instance = "", "*": path = "" } = useParams();
@@ -174,6 +183,15 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
   const summary = useQuery({ queryKey: ["projects-summary"], queryFn: () => api<Summary>("/projects/summary"), staleTime: 30_000 });
   const sorted = [...byDimension].sort();
   const anchor = (d: string) => `dim-${d.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  const [show, setShow] = useState<ActFilter>("all");
+  const [inTarget, setInTarget] = useState(true);
+  const { sort, toggle } = useSort<"name" | "level" | "status">({ key: "level", dir: "asc" });
+  const statusOf = (a: Activity) => (project.statuses?.[a.name]?.status ?? "unknown") as ActivityStatus;
+  const scoped = activities.filter((a) => !inTarget || a.level <= project.target_level);
+  const count = (f: ActFilter) => scoped.filter((a) => ACT_FILTER[f].includes(statusOf(a))).length;
+  const keep = (a: Activity) => (!inTarget || a.level <= project.target_level) && ACT_FILTER[show].includes(statusOf(a));
+  const order = compareBy<Activity, "name" | "level" | "status">(sort, (a, k) => (k === "name" ? a.name : k === "level" ? a.level : SEVERITY.indexOf(statusOf(a))),
+    (a, b) => a.level - b.level || a.name.localeCompare(b.name));
   return (
     <>
       <div className="overview">
@@ -190,22 +208,38 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
           ))}
         </nav>
       </div>
-      {sorted.map(([dimension, list]) => {
+      <div className="table-tools">
+        <StatusFilter label="Filtrer les pratiques par état" value={show} onChange={setShow} options={[
+          { value: "all", label: "Toutes", count: count("all") },
+          { value: "todo", label: "À mettre en place", count: count("todo"), tone: "fail" },
+          { value: "unknown", label: "Indéterminées", count: count("unknown"), tone: "unknown" },
+          { value: "done", label: "En place", count: count("done"), tone: "pass" },
+        ]} />
+        <label className="chip"><input type="checkbox" checked={inTarget} onChange={(e) => setInTarget(e.target.checked)} />
+          Jusqu'au niveau cible {project.target_level} seulement</label>
+      </div>
+      {sorted.filter(([, list]) => list.some(keep)).length === 0 && <p className="empty">Aucune pratique ne correspond à ce filtre.</p>}
+      {sorted.filter(([, list]) => list.some(keep)).map(([dimension, list]) => {
         const s = project.by_dimension?.[dimension];
         return (
           <section key={dimension} className="group" id={anchor(dimension)}>
             <h2 lang="en">{dimension} <span className="muted small" lang="fr">{s != null ? `${Math.round(s)}/100 · couverture ${coverage(list)} %` : "rien de mesuré"}</span></h2>
             <div className="table-scroll">
-              <table>
-                <thead><tr><th scope="col">Activité DSOMM</th><th scope="col">Niv.</th><th scope="col">Statut</th><th scope="col">Preuves</th></tr></thead>
+              <table className="t-fixed t-acts">
+                <thead><tr>
+                  <SortTh k="name" label="Pratique DSOMM" sort={sort} onSort={toggle} />
+                  <SortTh k="level" label="Niveau" sort={sort} onSort={toggle} className="num" />
+                  <SortTh k="status" label="État" sort={sort} onSort={toggle} />
+                  <th scope="col">Preuves</th>
+                </tr></thead>
                 <tbody>
-                  {list.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name)).map((a) => {
+                  {list.filter(keep).sort(order).map((a) => {
                     const st = project.statuses?.[a.name];
                     const mine = checks.filter((c) => c.activity === a.name);
                     return (
                       <tr key={a.name}>
-                        <td lang="en">{a.name}</td>
-                        <td>{a.level}</td>
+                        <td lang="en" className="cell-main">{a.name}</td>
+                        <td className="num">{a.level}</td>
                         <td>{st ? <ActivityBadge status={st.status as ActivityStatus} toConfirm={st.to_confirm} /> : <span className="muted">Non évaluée</span>}</td>
                         <td className="small">{mine.map((c) => c.title).join(" · ")}</td>
                       </tr>
@@ -222,22 +256,42 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
 }
 
 function Checks({ results, checks }: { results: Record<string, CheckResult>; checks: Check[] }) {
+  const [show, setShow] = useState<CheckFilter>("all");
+  const { sort, toggle } = useSort<"title" | "status">({ key: "status", dir: "asc" });
+  const stateOf = (c: Check): CheckFilter => (c.scope?.decision === "excluded" ? "other" : !results[c.id] ? "other"
+    : ({ fail: "fail", unknown: "unknown", pass: "pass", not_applicable: "other" } as const)[results[c.id].status]);
+  const count = (f: CheckFilter) => checks.filter((c) => f === "all" || stateOf(c) === f).length;
+  const order = compareBy<Check, "title" | "status">(sort, (c, k) => (k === "title" ? c.title : CHECK_ORDER.indexOf(stateOf(c))), (a, b) => a.title.localeCompare(b.title, "fr"));
   const bySource = new Map<string, Check[]>();
-  for (const c of checks) bySource.set(c.source, [...(bySource.get(c.source) ?? []), c]);
+  for (const c of checks.filter((c) => show === "all" || stateOf(c) === show)) bySource.set(c.source, [...(bySource.get(c.source) ?? []), c]);
   return (
     <>
+      <div className="table-tools">
+        <StatusFilter label="Filtrer les preuves par résultat" value={show} onChange={setShow} options={[
+          { value: "all", label: "Toutes", count: count("all") },
+          { value: "fail", label: "À corriger", count: count("fail"), tone: "fail" },
+          { value: "unknown", label: "Indéterminées", count: count("unknown"), tone: "unknown" },
+          { value: "pass", label: "Validées", count: count("pass"), tone: "pass" },
+          { value: "other", label: "Sans objet ou écartées", count: count("other") },
+        ]} />
+      </div>
+      {bySource.size === 0 && <p className="empty">Aucune preuve ne correspond à ce filtre.</p>}
       {[...bySource].map(([source, list]) => (
         <section key={source} className="group">
-          <h2>{SOURCE[source] ?? source}</h2>
+          <h2>{SOURCE[source] ?? source} <span className="muted small">{list.length} preuve{list.length > 1 ? "s" : ""}</span></h2>
           <div className="table-scroll">
-            <table>
-              <thead><tr><th scope="col">Preuve</th><th scope="col">Statut</th><th scope="col">Constat</th></tr></thead>
+            <table className="t-fixed t-checks">
+              <thead><tr>
+                <SortTh k="title" label="Preuve" sort={sort} onSort={toggle} />
+                <SortTh k="status" label="Résultat" sort={sort} onSort={toggle} />
+                <th scope="col">Constat</th>
+              </tr></thead>
               <tbody>
-                {list.map((c) => {
+                {list.sort(order).map((c) => {
                   const r = results[c.id];
                   return (
                     <tr key={c.id}>
-                      <td title={c.id}>{c.title}{c.kind === "hint" && <span className="muted small"> · indice, à confirmer</span>}</td>
+                      <td title={c.id} className="cell-main">{c.title}{c.kind === "hint" && <span className="muted small"> · indice, à confirmer</span>}</td>
                       <td>{c.scope?.decision === "excluded" ? <span className="badge tone-not_applicable" title={c.scope.reason}>Écartée</span> : r ? <CheckBadge status={r.status} /> : <span className="muted">Non collectée</span>}</td>
                       <td>{c.scope?.decision === "excluded" ? <span className="muted">{c.scope.reason}</span> : r?.message}{r?.reused && <span className="muted small"> (inchangé depuis l'analyse précédente)</span>}
                         {c.scope?.decision !== "excluded" && r && r.status !== "pass" && r.status !== "not_applicable" && <FixGuide fix={c.fix} />}</td>

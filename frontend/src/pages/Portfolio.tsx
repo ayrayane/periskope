@@ -132,7 +132,7 @@ export default function Portfolio() {
               <ul className="dim-list">
                 {Object.entries(s.dimensions).sort().map(([d, v]) => (
                   <li key={d}>
-                    <span className="gap-name" lang="en">{d}</span>
+                    <span className="gap-name" lang="en" title={d}>{d}</span>
                     <span className="gap-bar" aria-hidden="true"><span style={{ width: `${v}%` }} /></span>
                     <span className="gap-pct">{Math.round(v)}</span>
                   </li>
@@ -151,7 +151,7 @@ export default function Portfolio() {
                     <li key={g.activity}>
                       <span className="gap-level" title={`Niveau ${g.level}`}>N{g.level}</span>
                       <span className="gap-body">
-                        <span className="gap-name" lang="en">{g.activity}</span>
+                        <span className="gap-name" lang="en" title={g.activity}>{g.activity}</span>
                         <span className="gap-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
                         <span className="muted small">{g.missing} projet{g.missing > 1 ? "s" : ""} sur {g.measured}</span>
                       </span>
@@ -208,8 +208,8 @@ export default function Portfolio() {
                     <span className="muted small">{instances.find((i) => i.slug === p.instance)?.name ?? p.instance} · {p.namespace_path}</span>
                   </div>
                   <div role="cell"><Score score={p.score} coverage={p.coverage} /></div>
-                  <div role="cell">{when(p.last_success_at)}</div>
-                  <div role="cell">{p.last_error ? <span className="badge tone-fail">Échec : {p.last_error}</span> : p.last_status === "running" || p.last_status === "queued" ? <span className="badge tone-running">En cours</span> : null}</div>
+                  <div role="cell" className="num-cell">{when(p.last_success_at)}</div>
+                  <div role="cell">{p.last_error ? <span className="badge tone-fail">Échec : {p.last_error}</span> : p.last_status === "running" || p.last_status === "queued" ? <span className="badge tone-running">En cours</span> : p.score == null ? <span className="muted small">Jamais analysé</span> : <span className="muted small">À jour</span>}</div>
                 </div>
               );
             })}

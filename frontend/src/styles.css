@@ -507,3 +507,31 @@ button.nav-toggle[aria-expanded="true"] { transform: rotate(90deg); }
   @page { margin: 14mm; }
 }
 .trend-chart { max-height: 200px; }
+
+/* Tables (UI/UX Pro Max: sortable-table, number-tabular, truncation-strategy, Data-Dense Dashboard) */
+.table-tools { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 0 0 16px; }
+.status-filter { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 999px; background: var(--card); box-shadow: 0 2px 12px rgb(20 20 40 / 0.06); }
+.status-filter button { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 14px; border: 0; border-radius: 999px; background: none; color: var(--muted); font: 600 0.88rem var(--font); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.status-filter button:hover { color: var(--ink); background: var(--na-bg); }
+.status-filter button[aria-pressed="true"] { background: var(--ink-pill); color: var(--ink-pill-text); }
+.sf-count { min-width: 22px; padding: 0 7px; border-radius: 999px; background: var(--na-bg); color: var(--ink); font-size: 0.78rem; font-variant-numeric: tabular-nums; text-align: center; }
+.sf-fail .sf-count { background: var(--fail-bg); color: var(--fail); }
+.sf-unknown .sf-count { background: var(--unknown-bg); color: var(--unknown); }
+.sf-pass .sf-count { background: var(--pass-bg); color: var(--pass); }
+.status-filter button[aria-pressed="true"] .sf-count { background: color-mix(in srgb, var(--ink-pill-text) 22%, transparent); color: var(--ink-pill-text); }
+th .th-sort { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+th .th-sort:hover { color: var(--ink); }
+.th-arrow { opacity: 0.45; font-size: 0.9em; }
+th[aria-sort="ascending"] .th-arrow, th[aria-sort="descending"] .th-arrow { opacity: 1; color: var(--accent); }
+table td, table th { padding: 10px 14px; }
+table tbody td { font-size: 0.94rem; vertical-align: middle; }
+td.cell-main { font-weight: 550; }
+th.num, td.num { text-align: center; width: 80px; font-variant-numeric: tabular-nums; }
+.num-cell { font-variant-numeric: tabular-nums; }
+tbody tr { transition: background 0.12s; }
+.group > h2 .muted { font-weight: 500; }
+/* Same column widths in every section of a tab, so the columns line up from one table to the next. */
+table.t-fixed { table-layout: fixed; }
+.t-acts th:nth-child(1) { width: 34%; } .t-acts th:nth-child(2) { width: 96px; } .t-acts th:nth-child(3) { width: 170px; }
+.t-checks th:nth-child(1) { width: 36%; } .t-checks th:nth-child(2) { width: 160px; }
+table.t-fixed td { overflow-wrap: anywhere; }
