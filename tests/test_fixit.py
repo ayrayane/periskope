@@ -47,18 +47,18 @@ def maintainer():
     return Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}), maintains=frozenset({("gl", "team-a")}))
 
 
-def connect_gitlab(client):
-    started = client.post("/api/v1/fixit/gl/login", json={"return_to": "/p/gl/team-a/app?vue=preuves"}).json()["url"]
+def connect_gitlab(api):
+    started = api.post("/api/v1/fixit/gl/login", json={"return_to": "/p/gl/team-a/app?vue=preuves"}).json()["url"]
     q = parse_qs(urlparse(started).query)
     assert started.startswith(f"{GITLAB}/oauth/authorize") and q["client_id"] == ["app-id"] and q["code_challenge_method"] == ["S256"]
     with respx.mock(assert_all_called=False) as gl:
         token = gl.post(f"{GITLAB}/oauth/token").mock(return_value=httpx.Response(200, json={"access_token": "user-token", "expires_in": 7200}))
-        back = client.get(f"/api/v1/fixit/gl/callback?state={q['state'][0]}&code=abc", follow_redirects=False)
+        back = api.get(f"/api/v1/fixit/gl/callback?state={q['state'][0]}&code=abc", follow_redirects=False)
     assert back.status_code == 302 and back.headers["location"] == "/p/gl/team-a/app?vue=preuves"
     sent = parse_qs(token.calls[0].request.content.decode())
     assert sent["code_verifier"][0] and sent["client_secret"] == ["app-secret"]
     # The single-use state cannot be replayed.
-    assert client.get(f"/api/v1/fixit/gl/callback?state={q['state'][0]}&code=abc", follow_redirects=False).status_code == 400
+    assert api.get(f"/api/v1/fixit/gl/callback?state={q['state'][0]}&code=abc", follow_redirects=False).status_code == 400
 
 
 def test_fix_flow(client, db, fixit):  # noqa: F811
