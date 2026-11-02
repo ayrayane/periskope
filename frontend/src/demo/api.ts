@@ -132,10 +132,40 @@ class DemoError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
+// « Corriger dans GitLab » in the demo: real previews of a few fixes, an apply that changes nothing.
+const DEMO_FIXES: Record<string, { kind: "setting" | "mr"; label: string; preview: object }> = {
+  "gitlab.pipeline_must_succeed": { kind: "setting", label: "Exiger un pipeline réussi avant le merge", preview: {
+    summary: "Exiger un pipeline réussi avant le merge.", changes: [{ what: "Merge avec un pipeline en échec", before: "possible", after: "bloqué" }] } },
+  "gitlab.protected_branch_no_push": { kind: "setting", label: "Fermer le push direct", preview: {
+    summary: "Protéger « main » : plus aucun push direct, les changements passent par des merge requests.",
+    changes: [{ what: "Push direct sur main", before: "push direct : Maintainers", after: "personne (merge : Maintainers)" }] } },
+  "gitlab.secret_detection": { kind: "mr", label: "Ajouter la détection de secrets", preview: {
+    summary: "Ajouter le job GitLab Secret Detection au pipeline.",
+    files: [{ path: ".gitlab/ci/periskope-security.yml", content: "include:\n  # periskope: gitlab.secret_detection\n  - template: Jobs/Secret-Detection.gitlab-ci.yml\n" },
+      { path: ".gitlab-ci.yml", content: "include:\n  - local: .gitlab/ci/periskope-security.yml\nstages: [build, test]\n…" }] } },
+  "repo.patch_policy": { kind: "mr", label: "Ajouter SECURITY.md", preview: {
+    summary: "Ajouter une politique de correctifs (SECURITY.md).",
+    files: [{ path: "SECURITY.md", content: "# Politique de sécurité\n\nSignalez une faille à l'équipe via un ticket confidentiel.\nLes failles critiques sont corrigées sous 7 jours, les hautes sous 30 jours.\n" }] } },
+};
+
+function demoFix(instance: string, path: string, check: string | undefined, preview: boolean): unknown {
+  const proj = PROJECTS.find((x) => x.instance === instance && x.path === path);
+  if (!proj) throw new DemoError(404, "Ce projet n'existe pas dans la démo.");
+  if (!check) return { enabled: true, can_fix: true, connected: true, items: Object.entries(DEMO_FIXES)
+    .filter(([id]) => proj.results?.[id]?.status === "fail").map(([id, f]) => ({ check: id, kind: f.kind, label: f.label, needs: null })) };
+  const f = DEMO_FIXES[check];
+  if (!f) throw new DemoError(404, "Pas de correction automatique pour cette preuve.");
+  if (preview) return f.preview;
+  return f.kind === "mr" ? { done: "Démo : la merge request aurait été ouverte avec votre compte GitLab. Rien n'a été modifié." }
+    : { done: "Démo : le réglage aurait été appliqué avec votre compte GitLab. Rien n'a été modifié." };
+}
+
 function route(path: string, method: string): unknown {
   const u = new URL(path, "https://demo.invalid");
   const q = u.searchParams;
   const p = decodeURIComponent(u.pathname);
+  const fix = /^\/projects\/([^/]+)\/(.+?)\/fixes(?:\/([^/]+?)(\/preview)?)?$/.exec(p);
+  if (fix) return demoFix(fix[1], fix[2], fix[3], !!fix[4]);
   if (method !== "GET") throw new DemoError(403, "Démo en lecture seule : aucune analyse ni modification n'est possible ici.");
   if (p === "/me") return { sub: "demo", username: "demo", admin: false, reads_all: true, namespaces: [], maintains: [] };
   if (p === "/instances") return INSTANCES.map(({ sonar, ...i }) => i);

@@ -314,6 +314,14 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .snippet-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); font-size: 0.82rem; color: var(--muted); }
 .snippet-head button.secondary { padding: 3px 12px; border-radius: 999px; font-size: 0.82rem; }
 .snippet pre { margin: 0; padding: 12px; overflow-x: auto; font-size: 0.85rem; line-height: 1.5; background: color-mix(in srgb, var(--na-bg) 60%, var(--surface)); }
+.fixit { margin-top: 8px; }
+.fixit > button.secondary { padding: 4px 14px; border-radius: 999px; font-size: 0.9rem; font-weight: 650; }
+.fixit-preview { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: 12px; background: var(--accent-soft); }
+.fixit-preview table { width: 100%; min-width: 0; box-sizing: border-box; margin: 8px 0; background: var(--surface); }
+.fixit-preview th { width: auto !important; }
+.fixit-preview pre { max-height: 240px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fixit-actions { display: flex; gap: 8px; margin-top: 8px; }
+.fixit-done { margin-top: 8px; padding: 8px 12px; border-radius: 12px; background: var(--accent-soft); }
 .fix-docs { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; list-style: none; font-size: 0.88rem; }
 .fix-docs a { font-weight: 600; text-decoration: none; }
 .fix-docs a:hover { text-decoration: underline; }

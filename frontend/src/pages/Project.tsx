@@ -6,6 +6,7 @@ import { Activity, ActivityStatus, api, ApiError, DEMO, Check, CheckResult, Proj
 import BranchPicker from "../components/BranchPicker";
 import ScoreChart from "../components/ScoreChart";
 import FixGuide from "../components/FixGuide";
+import FixIt, { type FixOffer } from "../components/FixIt";
 import GroupNav, { ScopeCrumbs, useScopeData } from "../components/GroupNav";
 import { Help } from "../components/Help";
 import Radar from "../components/Radar";
@@ -165,7 +166,7 @@ export default function Project() {
         ) : tab === "preuves" ? (
           <>
           <p className="panel-intro">Chaque contrôle automatique <Help term="preuve" label="une preuve" />, ce qu'il a constaté et, s'il échoue, comment le corriger.</p>
-          <Checks results={results} checks={checks.data ?? []} />
+          <Checks results={results} checks={checks.data ?? []} url={url} instance={p.instance} />
           </>
         ) : tab === "a-faire" ? (
           <>
@@ -265,7 +266,9 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
   );
 }
 
-function Checks({ results, checks }: { results: Record<string, CheckResult>; checks: Check[] }) {
+function Checks({ results, checks, url, instance }: { results: Record<string, CheckResult>; checks: Check[]; url: string; instance: string }) {
+  const offer = useQuery({ queryKey: ["fixes", url], queryFn: () => api<FixOffer>(`${url}/fixes`) });
+  const fixable = new Map((offer.data?.can_fix ? offer.data.items : []).map((i) => [i.check, i]));
   const [show, setShow] = useState<CheckFilter>("all");
   const { sort, toggle } = useSort<"title" | "status">({ key: "status", dir: "asc" });
   const stateOf = (c: Check): CheckFilter => (c.scope?.decision === "excluded" ? "other" : !results[c.id] ? "other"
@@ -304,7 +307,9 @@ function Checks({ results, checks }: { results: Record<string, CheckResult>; che
                       <td title={c.id} className="cell-main">{c.title}{c.kind === "hint" && <span className="muted small"> · indice, à confirmer</span>}</td>
                       <td>{c.scope?.decision === "excluded" ? <span className="badge tone-not_applicable" title={c.scope.reason}>Écartée</span> : r ? <CheckBadge status={r.status} /> : <span className="muted">Non collectée</span>}</td>
                       <td>{c.scope?.decision === "excluded" ? <span className="muted">{c.scope.reason}</span> : r?.message}{r?.reused && <span className="muted small"> (inchangé depuis l'analyse précédente)</span>}
-                        {c.scope?.decision !== "excluded" && r && r.status !== "pass" && r.status !== "not_applicable" && <FixGuide fix={c.fix} />}</td>
+                        {c.scope?.decision !== "excluded" && r && r.status !== "pass" && r.status !== "not_applicable" && <>
+                          {fixable.has(c.id) && <FixIt url={url} instance={instance} check={c.id} kind={fixable.get(c.id)!.kind} />}
+                          <FixGuide fix={c.fix} /></>}</td>
                     </tr>
                   );
                 })}
