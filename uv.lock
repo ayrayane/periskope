@@ -11,6 +11,7 @@ members = [
     "periskope-collector",
     "periskope-core",
     "periskope-db",
+    "periskope-fixes",
     "periskope-scheduler",
 ]
 
@@ -963,6 +964,7 @@ dependencies = [
     { name = "httpx" },
     { name = "periskope-core" },
     { name = "periskope-db" },
+    { name = "periskope-fixes" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "structlog" },
     { name = "uvicorn" },
@@ -975,6 +977,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "periskope-core", editable = "packages/core" },
     { name = "periskope-db", editable = "packages/db" },
+    { name = "periskope-fixes", editable = "packages/fixes" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", specifier = ">=0.32" },
@@ -1067,6 +1070,21 @@ requires-dist = [
     { name = "periskope-core", editable = "packages/core" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+]
+
+[[package]]
+name = "periskope-fixes"
+version = "0.1.0"
+source = { editable = "packages/fixes" }
+dependencies = [
+    { name = "httpx" },
+    { name = "periskope-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28" },
+    { name = "periskope-core", editable = "packages/core" },
 ]
 
 [[package]]

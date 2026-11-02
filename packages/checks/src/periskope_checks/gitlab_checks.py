@@ -6,12 +6,12 @@ import statistics
 from datetime import datetime, timedelta
 
 from periskope_core.models import Outcome
+from periskope_core.patterns import SECRETISH
 
 from periskope_checks.context import Context, nodes
 from periskope_checks.registry import Depends, check
 
 DEP_MR = re.compile(r"^(renovate|dependabot)[/-]|renovate|dependabot", re.IGNORECASE)
-SECRETISH = re.compile(r"TOKEN|PASSWORD|PASSWD|SECRET|API_?KEY|PRIVATE_?KEY|CREDENTIAL", re.IGNORECASE)
 NO_ONE, MAINTAINER = 0, 40
 
 

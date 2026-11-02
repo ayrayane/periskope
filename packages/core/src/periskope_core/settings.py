@@ -22,6 +22,8 @@ class Instance(BaseModel):
     space_dormant: bool = False
     # Private CA bundle to trust, or None for the system store.
     ca_file: str | None = None
+    # « Corriger dans GitLab »: needs a GitLab OAuth application for this instance (Secret gitlab-oauth-<slug>).
+    fixes: bool = False
 
 
 def env(name: str, default: str | None = None) -> str:

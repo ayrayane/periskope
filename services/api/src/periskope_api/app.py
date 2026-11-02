@@ -30,6 +30,7 @@ from periskope_db import settings as hot
 from pydantic import BaseModel, Field
 
 from periskope_api import admin as admin_routes
+from periskope_api import fixit as fixit_routes
 from periskope_api.auth import Settings, Verifier, viewer
 
 BRANCH_WAIT_S = 3.0
@@ -53,7 +54,7 @@ api = APIRouter(prefix="/api/v1")
 
 def problem(status: int, detail: Any) -> JSONResponse:
     titles = {400: "Requête invalide", 401: "Non authentifié", 403: "Interdit", 404: "Introuvable", 409: "Conflit",
-              422: "Données invalides", 429: "Trop de requêtes", 503: "Indisponible"}
+              422: "Données invalides", 428: "Connexion GitLab requise", 429: "Trop de requêtes", 503: "Indisponible"}
     body = {"type": "about:blank", "title": titles.get(status, "Erreur"), "status": status,
             "detail": detail if isinstance(detail, str) else json.dumps(detail, default=str)}
     return JSONResponse(body, status_code=status, media_type="application/problem+json")
@@ -656,5 +657,7 @@ async def delete_scope(target_id: str, me: Me, target: Literal["check", "activit
     await after_scope_change(instance, project_id)
 
 
+# Before the API router: its /projects/{instance}/{path:path} would otherwise swallow .../fixes.
+app.include_router(fixit_routes.router(state, current, audit, project_row))
 app.include_router(api)
 app.include_router(admin_routes.router(state, current, audit))

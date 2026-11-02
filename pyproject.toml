@@ -25,19 +25,31 @@ line-length = 140
 target-version = "py312"
 
 [tool.importlinter]
-root_packages = ["periskope_core", "periskope_clients", "periskope_checks", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
+root_packages = ["periskope_core", "periskope_clients", "periskope_checks", "periskope_fixes", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
 
 [[tool.importlinter.contracts]]
 name = "core imports nothing else from the repo"
 type = "forbidden"
 source_modules = ["periskope_core"]
-forbidden_modules = ["periskope_clients", "periskope_checks", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
+forbidden_modules = ["periskope_clients", "periskope_checks", "periskope_fixes", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
 
 [[tool.importlinter.contracts]]
 name = "checks import only core and clients"
 type = "forbidden"
 source_modules = ["periskope_checks"]
-forbidden_modules = ["periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
+forbidden_modules = ["periskope_fixes", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
+
+[[tool.importlinter.contracts]]
+name = "only the API writes to GitLab, with the user's own token: no service, check or collector imports the fixes"
+type = "forbidden"
+source_modules = ["periskope_collector", "periskope_scheduler", "periskope_clients", "periskope_db"]
+forbidden_modules = ["periskope_fixes"]
+
+[[tool.importlinter.contracts]]
+name = "fixes import only core"
+type = "forbidden"
+source_modules = ["periskope_fixes"]
+forbidden_modules = ["periskope_clients", "periskope_checks", "periskope_db", "periskope_api", "periskope_scheduler", "periskope_collector"]
 
 [[tool.importlinter.contracts]]
 name = "the API never touches the sources"
