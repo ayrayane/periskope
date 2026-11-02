@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet
 from periskope_db import Viewer, connect
 
 sys.path.insert(0, str(Path(__file__).parent))  # importlib mode: the shared fixtures live in test_integration
-from test_integration import client, db  # noqa: E402, F401
+from test_integration import client, db  # noqa: F401
 
 GITLAB = "https://gitlab.test"
 
