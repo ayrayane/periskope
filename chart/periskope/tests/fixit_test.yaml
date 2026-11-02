@@ -1,0 +1,32 @@
+suite: corriger dans GitLab
+templates: [api.yaml, fixit.yaml, config.yaml]
+set:
+  host: periskope.test
+  instances:
+    - { slug: gl-prod, name: Prod, url: https://gl-prod.test }
+tests:
+  - it: adds nothing while no instance offers fixes
+    template: fixit.yaml
+    asserts:
+      - hasDocuments: { count: 0 }
+  - it: generates the token key once fixes are on
+    template: fixit.yaml
+    set:
+      instances:
+        - { slug: gl-prod, name: Prod, url: https://gl-prod.test, fixes: true }
+    asserts:
+      - containsDocument: { kind: Secret, apiVersion: v1, name: periskope-fixit }
+      - matchRegex: { path: data.key, pattern: "^[A-Za-z0-9+/=]{40,}$" }
+  - it: mounts the instance's OAuth application on the API
+    template: api.yaml
+    documentIndex: 0
+    set:
+      instances:
+        - { slug: gl-prod, name: Prod, url: https://gl-prod.test, fixes: true, oauthSecret: my-oauth }
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: { name: oauth-gl-prod, secret: { secretName: my-oauth } }
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: { name: oauth-gl-prod, mountPath: /var/run/secrets/periskope/gitlab-oauth-gl-prod, readOnly: true }

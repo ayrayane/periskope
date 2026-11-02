@@ -39,6 +39,12 @@
           "spaceDormant": {
             "type": "boolean"
           },
+          "fixes": {
+            "type": "boolean"
+          },
+          "oauthSecret": {
+            "type": "string"
+          },
           "sonarUrl": {
             "type": "string"
           },

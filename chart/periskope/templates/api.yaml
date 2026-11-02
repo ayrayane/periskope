@@ -18,8 +18,23 @@ spec:
           readinessProbe: { httpGet: { path: /api/v1/health, port: http }, periodSeconds: 10 }
           livenessProbe: { tcpSocket: { port: http }, periodSeconds: 20 }
           resources: {{ toJson .Values.api.resources }}
-          volumeMounts: {{- include "periskope.mounts" . | nindent 12 }}
-      volumes: {{- include "periskope.volumes" . | nindent 8 }}
+          volumeMounts:
+            {{- include "periskope.mounts" . | nindent 12 }}
+            {{- if include "periskope.anyFixes" . }}
+            - { name: fixit, mountPath: /var/run/secrets/periskope/periskope-fixit, readOnly: true }
+            {{- range .Values.instances }}{{ if .fixes }}
+            - { name: oauth-{{ .slug }}, mountPath: /var/run/secrets/periskope/gitlab-oauth-{{ .slug }}, readOnly: true }
+            {{- end }}{{ end }}
+            {{- end }}
+      volumes:
+        {{- include "periskope.volumes" . | nindent 8 }}
+        {{- if include "periskope.anyFixes" . }}
+        - { name: fixit, secret: { secretName: periskope-fixit } }
+        {{- range .Values.instances }}{{ if .fixes }}
+        # Keys client_id and client_secret of the GitLab OAuth application (scope api, redirect https://<host>/api/v1/fixit/<slug>/callback).
+        - { name: oauth-{{ .slug }}, secret: { secretName: {{ .oauthSecret | default (printf "gitlab-oauth-%s" .slug) }} } }
+        {{- end }}{{ end }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

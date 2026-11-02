@@ -13,6 +13,9 @@ instances: []
 #    # Without Crossplane: existing Secrets holding key "token" (read_api + read_repository, admin-wide read).
 #    tokenSecret: gitlab-token-gl-prod
 #    webhookSecret: gitlab-webhook-gl-prod
+#    # « Corriger dans GitLab »: Maintainers apply a fix with their own GitLab account, on click, after a preview.
+#    fixes: false
+#    oauthSecret: gitlab-oauth-gl-prod  # client_id / client_secret of a GitLab OAuth application (scope api, redirect https://<host>/api/v1/fixit/<slug>/callback)
 
 image:
   repository: registry.example.com/periskope/periskope

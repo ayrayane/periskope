@@ -1,0 +1,12 @@
+{{- if include "periskope.anyFixes" . }}
+{{- /* Encrypts the GitLab tokens people lend for a fix. Generated once, then kept: a new key would only log everyone out. */ -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "periskope-fixit" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: periskope-fixit
+  annotations: { helm.sh/resource-policy: keep }
+type: Opaque
+data:
+  key: {{ if $existing }}{{ index $existing.data "key" }}{{ else }}{{ randBytes 32 | replace "+" "-" | replace "/" "_" | b64enc }}{{ end }}
+{{- end }}

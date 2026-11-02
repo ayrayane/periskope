@@ -48,3 +48,8 @@ env:
 - { name: ca, configMap: { name: {{ . }} } }
 {{- end }}
 {{- end }}
+
+{{- /* True when at least one instance offers « Corriger dans GitLab ». */ -}}
+{{- define "periskope.anyFixes" -}}
+{{- range .Values.instances }}{{ if .fixes }}true{{ end }}{{ end -}}
+{{- end }}
