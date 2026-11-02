@@ -3,7 +3,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-qu
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, ProjectRow, Summary } from "../api";
+import { api, DEMO, ProjectRow, Summary } from "../api";
 import GroupNav, { ScopeCrumbs, useScopeData } from "../components/GroupNav";
 import { Help } from "../components/Help";
 import { ExportBar, HeatmapCard, TrendCard } from "../components/Pilot";
@@ -213,7 +213,7 @@ export default function Portfolio() {
           {instance && <ScopeCrumbs instance={instance} namespace={namespace?.split("/").slice(0, -1).join("/") || undefined} instances={instances} />}
           <div className="title-row">
             <h1 id="portfolio-title" tabIndex={-1}>{title}</h1>
-            {gitlabUrl && <a className="gitlab-link" href={gitlabUrl} target="_blank" rel="noreferrer">Ouvrir dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
+            {gitlabUrl && !DEMO && <a className="gitlab-link" href={gitlabUrl} target="_blank" rel="noreferrer">Ouvrir dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
           </div>
           <p className="hero-sub">{instance
             ? <>{namespace ? `Groupe ${namespace} et ses sous-groupes` : `Tous les groupes de l'instance ${inst?.name ?? instance}`}{inst && <> · <span className="mono">{new URL(inst.url).host}</span></>}. Un score de 100 veut dire que le projet atteint son niveau cible <Help term="score" label="le score" />.</>

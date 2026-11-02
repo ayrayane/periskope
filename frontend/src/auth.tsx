@@ -27,9 +27,12 @@ export function userManager(): Promise<UserManager> {
 const UserContext = createContext<User | null>(null);
 export const useUser = () => useContext(UserContext);
 
+const DEMO_USER = { profile: { preferred_username: "démo" }, access_token: "", expired: false } as unknown as User;
+
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null | undefined>(undefined);
+  const [user, setUser] = useState<User | null | undefined>(import.meta.env.VITE_DEMO === "1" ? DEMO_USER : undefined);
   useEffect(() => {
+    if (import.meta.env.VITE_DEMO === "1") return;
     userManager().then(async (m) => {
       const u = await m.getUser();
       if (!u || u.expired) await m.signinRedirect({ state: location.pathname + location.search });

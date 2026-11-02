@@ -7,7 +7,11 @@ export class ApiError extends Error {
   }
 }
 
+export const DEMO = import.meta.env.VITE_DEMO === "1";
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // Demo build: a fictitious estate answered in the browser, no server and no sign-in.
+  if (DEMO) return (await import("./demo/api")).demoApi<T>(path, init);
   // init.signal lets TanStack Query abort a request whose answer nobody waits for any more.
   const user = await (await userManager()).getUser();
   const res = await fetch(`/api/v1${path}`, {
@@ -26,6 +30,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 /** Saves an API file (CSV) through the authenticated fetch: a plain link would not carry the token. */
 export async function download(path: string): Promise<void> {
+  if (DEMO) throw new ApiError(403, "Les exports sont désactivés dans la démo.");
   const user = await (await userManager()).getUser();
   const res = await fetch(`/api/v1${path}`, { headers: user ? { Authorization: `Bearer ${user.access_token}` } : {} });
   if (!res.ok) throw new ApiError(res.status, `Erreur ${res.status}`);

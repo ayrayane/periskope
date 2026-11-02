@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Activity, ActivityStatus, api, ApiError, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run, Summary } from "../api";
+import { Activity, ActivityStatus, api, ApiError, DEMO, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run, Summary } from "../api";
 import BranchPicker from "../components/BranchPicker";
 import ScoreChart from "../components/ScoreChart";
 import FixGuide from "../components/FixGuide";
@@ -103,7 +103,7 @@ export default function Project() {
         <div>
           <div className="title-row">
             <h1 id="project-title" tabIndex={-1}>{p.path.split("/").at(-1)}</h1>
-            {gitlab && <a className="gitlab-link" href={`${gitlab.url.replace(/\/$/, "")}/${p.path}`} target="_blank" rel="noreferrer">Ouvrir dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
+            {gitlab && !DEMO && <a className="gitlab-link" href={`${gitlab.url.replace(/\/$/, "")}/${p.path}`} target="_blank" rel="noreferrer">Ouvrir dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
           </div>
           <p className="muted">
             <span className="mono">{p.path}</span>{gitlab && <> sur {gitlab.name}</>} · branche de référence <code>{p.default_branch}</code> · niveau cible {p.target_level}

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { lazy, StrictMode, Suspense, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/plus-jakarta-sans";
-import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Link, MemoryRouter, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, ApiError, Me } from "./api";
 import { Callback, RequireAuth, useUser, userManager } from "./auth";
 import Portfolio from "./pages/Portfolio";
@@ -47,7 +47,8 @@ function Shell() {
         </nav>
         <div className="user">
           <span className="small">{user?.profile.preferred_username}</span>
-          <button type="button" className="link" onClick={() => userManager().then((m) => m.signoutRedirect())}>Se déconnecter</button>
+          {import.meta.env.VITE_DEMO === "1" ? <span className="small muted">données fictives</span>
+            : <button type="button" className="link" onClick={() => userManager().then((m) => m.signoutRedirect())}>Se déconnecter</button>}
         </div>
       </header>
       <main id="main">
@@ -67,15 +68,18 @@ function Shell() {
   );
 }
 
+// The demo is published on a page that cannot change its own address: navigation stays in memory there.
+const Router = import.meta.env.VITE_DEMO === "1" ? MemoryRouter : BrowserRouter;
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queries}>
-      <BrowserRouter>
+      <Router>
         <Routes>
           <Route path="/callback" element={<Callback />} />
           <Route path="*" element={<RequireAuth><Shell /></RequireAuth>} />
         </Routes>
-      </BrowserRouter>
+      </Router>
     </QueryClientProvider>
   </StrictMode>,
 );

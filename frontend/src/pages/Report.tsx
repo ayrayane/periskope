@@ -1,7 +1,7 @@
 // Committee report of a scope: everything on one printable page, saved as PDF from the browser's print dialog.
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { api, ProjectRow, Summary } from "../api";
+import { api, DEMO, ProjectRow, Summary } from "../api";
 import { scopeQuery, HeatmapCard, TrendCard } from "../components/Pilot";
 import { useScopeData } from "../components/GroupNav";
 import { Skeleton, when } from "../components/status";
@@ -37,10 +37,10 @@ export default function Report() {
   const pct = (n: number) => (s.total ? Math.round((100 * n) / s.total) : 0);
   return (
     <article className="report" aria-labelledby="report-title">
-      <div className="report-actions no-print">
+      {!DEMO && <div className="report-actions no-print">
         <button type="button" className="btn-ink" onClick={() => window.print()}>Imprimer ou enregistrer en PDF</button>
         <span className="muted small">Dans la fenêtre d'impression, choisissez « Enregistrer au format PDF ».</span>
-      </div>
+      </div>}
       <header className="report-head">
         <p className="report-eyebrow">Rapport DevSecOps · référentiel OWASP DSOMM 5.0.2</p>
         <h1 id="report-title" tabIndex={-1}>{scope}</h1>
