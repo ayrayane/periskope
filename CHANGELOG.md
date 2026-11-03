@@ -1,7 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-11-03
 
+**Corriger dans GitLab**
+- A Maintainer fixes a failing check from its project page: a preview first, then one click applies it with their own GitLab account (OAuth, PKCE). Periskope's service token stays read-only; nothing is ever changed without that click.
+- GitLab settings are changed in place (protected branch, force push, pipeline must succeed, visibility, approvals, secret push protection, nightly schedule, masked variables); files arrive as a merge request on a `periskope/…` branch, never pushed to the default branch, and an existing file is never overwritten.
+- Each fix is audited (`fix.apply`, `fix.refused`); a setting fix re-analyses the project. Premium and Ultimate fixes are not offered on CE.
+- Off by default: `instances[].fixes: true` plus a GitLab OAuth application (`gitlab-oauth-<slug>` Secret, scope `api`); the chart generates the key that encrypts the borrowed GitLab tokens.
+
+**Rights and identity**
 - Keycloak roles are mapped to Periskope rights by configuration (`oidc.roleMap`); new `auditor` right reads every project without administering (e.g. a workspace `manager`).
 - Account matching by login for LDAP-only realms (`identity.match: username`, optionally GitLab LDAP accounts only), as an alternative to the verified e-mail.
 - Launching analyses and scoping a project follow GitLab: Maintainer or Owner of the group or project. The Keycloak `maintainer` role no longer grants it (v1 security audit).
