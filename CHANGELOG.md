@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.0 — 2026-11-04
+
+**Vulnérabilités**
+- New « Vulnérabilités » tab: open vulnerabilities of the default branch grouped by CVE (by title without one), searchable, filtered by instance, group and severity; one click lists every project it touches, with its score.
+- Portfolio card « Vulnérabilités ouvertes » links to it; the committee report gains an open-vulnerabilities section.
+- Read from GitLab's vulnerability report (Ultimate); on CE it says « non mesuré », never zero. Migration 0006 adds the per-project findings.
+
+**Security and robustness (code audit)**
+- Plain realm roles of other applications (`admin`, `auditor`) no longer grant Periskope rights: only `periskope-*` realm roles, `oidc.roleMap` entries and client roles count.
+- « Corriger dans GitLab »: the GitLab login is bound to the browser that started it; a login link opened by someone else completes nothing.
+- Runs left active by a stopped collector are failed by the nightly catch-up instead of blocking their project.
+- Hand-granted rights: a project grant opens that project, an instance grant without namespace the whole instance.
+- A project listing cut short by the page limit retires no project; a failed nightly task is retried; a tampered cursor is a 400.
+- API docs (`/api/v1/docs`) are off unless `PERISKOPE_API_DOCS=true`.
+
+**Interface**
+- Long names no longer overflow cards and tables (tooltips on truncated paths), dashboard layout fixed between 1000 and 1400 px.
+
 ## 1.1.0 — 2026-11-03
 
 **Corriger dans GitLab**
