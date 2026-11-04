@@ -12,6 +12,7 @@ import { Help } from "../components/Help";
 import Radar from "../components/Radar";
 import { compareBy, SortTh, StatusFilter, useSort } from "../components/TableTools";
 import { ActivityBadge, CheckBadge, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
+import { NOT_MEASURED, total, VulnBar } from "../components/Vulns";
 import { ScopeEditor } from "./Scope";
 import { dimension as dimLabel, practice } from "../labels";
 
@@ -134,6 +135,13 @@ export default function Project() {
         </span>
         {launch.error && <span className="error" role="alert">{(launch.error as Error).message}</span>}
       </div>
+      {p.last_run && (
+        <section className="card vulns vulns-project" aria-labelledby="vulns-title">
+          <h2 id="vulns-title">Vulnérabilités ouvertes {p.vulns && <span className="muted">{total(p.vulns)}</span>}</h2>
+          {p.vulns ? <VulnBar v={p.vulns} /> : <p className="muted">{NOT_MEASURED}</p>}
+          {p.vulns && gitlab && !DEMO && <a href={`${gitlab.url.replace(/\/$/, "")}/${p.path}/-/security/vulnerability_report`} target="_blank" rel="noreferrer">Voir le détail dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
+        </section>
+      )}
       {p.last_error && <p className="banner">Dernière analyse impossible : {p.last_error}. Le score affiché reste celui de la dernière analyse réussie.</p>}
 
       {p.last_run && <NextSteps project={p} url={url} activities={activities.data?.items ?? []} checks={checks.data ?? []} onAll={() => selectTab("a-faire")} />}

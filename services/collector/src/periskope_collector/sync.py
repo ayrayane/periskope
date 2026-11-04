@@ -5,8 +5,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
+import structlog
 from periskope_clients.gitlab import GitLab
 from periskope_core.settings import Instance
+
+log = structlog.get_logger()
 
 
 def exclusion(p: dict[str, Any], excluded_namespaces: list[str]) -> str | None:
@@ -27,12 +30,14 @@ async def sync_projects(db: asyncpg.Pool, gl: GitLab, instance: Instance) -> dic
     """Adds new projects, disables archived or deleted ones (keeping their history), refreshes names and branches."""
     seen: list[int] = []
     rows = []
+    truncated = False
     for root in instance.tracked_namespaces:
         # Keyset pagination of 100, no per-project call: about ten calls for 1,000 projects.
         res = await gl.pages(f"/groups/{root.replace('/', '%2F')}/projects", include_subgroups="true", order_by="id",
                              sort="asc", pagination="keyset", max_pages=200)
         if res is None:
             raise RuntimeError(f"groupe {root} illisible avec le jeton de service")
+        truncated |= res[1]
         for p in res[0]:
             seen.append(p["id"])
             rows.append((instance.slug, p["id"], p["path_with_namespace"], p["namespace"]["full_path"], p["namespace"]["kind"],
@@ -52,13 +57,14 @@ async def sync_projects(db: asyncpg.Pool, gl: GitLab, instance: Instance) -> dic
                  sonar_key = CASE WHEN projects.sonar_key_manual THEN projects.sonar_key ELSE excluded.sonar_key END""",
             rows,
         )
-        gone = await conn.execute(
+        # A list cut short says nothing about the projects it did not reach: none is retired on its account.
+        gone = "UPDATE 0" if truncated else await conn.execute(
             "UPDATE projects SET enabled = false, excluded_reason = 'supprimé ou sorti des groupes suivis'"
             " WHERE instance = $1 AND NOT (gitlab_id = ANY($2::bigint[])) AND enabled", instance.slug, seen)
         await conn.execute(
             "INSERT INTO project_state (project_id) SELECT id FROM projects WHERE instance = $1 AND enabled ON CONFLICT DO NOTHING", instance.slug)
         await conn.execute("UPDATE gitlab_instances SET last_sync_at = now() WHERE slug = $1", instance.slug)
-    return {"seen": len(seen), "disabled": int(gone.split()[-1])}
+    return {"seen": len(seen), "disabled": int(gone.split()[-1]), "truncated": truncated}
 
 
 def _ts(value: str | None) -> datetime | None:
@@ -139,4 +145,7 @@ async def memberships(gl: GitLab, username: str, email: str | None, match: str =
                    "projects": p["pageInfo"]["endCursor"] if p["pageInfo"]["hasNextPage"] else None}
         if not any(cursors.values()):
             break
+    else:
+        # shortcut: 2,000 groups and projects at most, the rest unseen (never wrongly shown); page further if anyone reaches it.
+        log.warning("memberships_truncated", username=username)
     return {"groups": sorted(groups), "projects": sorted(projects.items()), "maintains": sorted(maintained), "at": datetime.now(UTC).isoformat()}

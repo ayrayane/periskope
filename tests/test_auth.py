@@ -49,6 +49,8 @@ def test_accepted_token_and_role():
     claims = asyncio.run(v.claims(token(resource_access={"periskope": {"roles": ["maintainer"]}})))
     assert claims["sub"] == "u-1" and v.role(claims) == "maintainer"
     assert v.role({"realm_access": {"roles": ["periskope-admin", "viewer"]}}) == "admin"
+    # Another application's realm roles grant nothing here.
+    assert v.role({"realm_access": {"roles": ["admin", "auditor"]}}) == "viewer"
     assert v.role({}) == "viewer"
 
 
@@ -104,6 +106,27 @@ def test_hand_granted_rights(database_url):
     sub2 = f"u-{uuid.uuid4().hex}"
     v2, _ = scope(database_url, {"sub": sub2, "preferred_username": "dan"}, permissions=[(None, "all", None, "admin")])
     assert v2.admin
+
+
+def test_hand_granted_project_and_instance(database_url):
+    sub, path, gid = f"u-{uuid.uuid4().hex}", f"team-y/{uuid.uuid4().hex[:8]}", uuid.uuid4().int % 10**9
+
+    async def run():
+        pool = await connect(database_url)
+        await bootstrap(pool, {"gl": INSTANCE})
+        await pool.execute("INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch)"
+                           " VALUES ('gl', $1, $2, 'team-y', 'group', 'main')", gid, path)
+        await pool.execute("INSERT INTO permissions (subject, instance, scope_kind, scope_value, role) VALUES ($1, 'gl', 'project', $2, 'viewer'),"
+                           " ($1, 'gl', 'all', NULL, 'viewer')", sub, path)
+        v = await viewer(pool, Arq({}), verifier(), {"sub": sub, "preferred_username": "erin"})
+        where, params = v.where()
+        seen = await pool.fetchval(f"SELECT count(*) FROM projects p WHERE p.instance = 'gl' AND {where}", *params)
+        total = await pool.fetchval("SELECT count(*) FROM projects WHERE instance = 'gl'")
+        await pool.close()
+        return v, seen, total
+    v, seen, total = asyncio.run(run())
+    # A project grant is that project; an instance grant without a namespace is the whole instance, read only.
+    assert ("gl", gid) in v.projects and seen == total and not v.maintains
 
 
 def test_workspace_roles_mapped(database_url, monkeypatch):

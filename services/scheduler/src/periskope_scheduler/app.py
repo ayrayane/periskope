@@ -110,7 +110,12 @@ async def cron_loop() -> None:
                     key = f"scheduler:done:{task}:{now.date()}"
                     if now.time() >= time.fromisoformat(getattr(conf, field)) and await redis.set(key, 1, nx=True, ex=2 * 86400):
                         log.info("task_start", task=task)
-                        await globals()[task]()
+                        try:
+                            await globals()[task]()
+                        except Exception:
+                            # Not done after all: the next loop, 20 s later, tries again.
+                            await redis.delete(key)
+                            raise
         except Exception:
             log.exception("cron_error")
         await asyncio.sleep(20)
@@ -123,6 +128,12 @@ async def sync_projects() -> None:
 
 async def catch_up() -> None:
     """Every active project not already checked today, instance by instance on its own queue."""
+    # A collector killed mid-run leaves its run active, and the one-active-run index then blocks the project for good.
+    # Running: well past the 10 min job timeout. Queued: a day, so a long nightly backlog is never cut.
+    stuck = await state["db"].execute(
+        "UPDATE runs SET status = 'failed', finished_at = now(), error = 'analyse interrompue (collecteur arrêté)'"
+        " WHERE (status = 'running' AND started_at < now() - interval '2 hours') OR (status = 'queued' AND created_at < now() - interval '1 day')")
+    log.info("stuck_runs_failed", runs=int(stuck.split()[-1]))
     rows = await state["db"].fetch(
         "SELECT p.id, p.instance FROM projects p JOIN project_state s ON s.project_id = p.id"
         " WHERE p.enabled AND s.next_due_at <= now() ORDER BY s.next_due_at")

@@ -43,7 +43,7 @@ export function TrendCard({ instance, namespace }: { instance?: string; namespac
           {t.declining.map((d) => (
             <li key={`${d.instance}/${d.path}`}>
               <Link to={`/p/${d.instance}/${d.path}`}>{d.path.split("/").at(-1)}</Link>
-              <span className="muted small">{d.path}</span>
+              <span className="muted small" title={d.path}>{d.path}</span>
               <span className="decl-delta">{Math.round(d.before)} → {Math.round(d.score)} <b>▼ {Math.round(d.before - d.score)}</b></span>
             </li>
           ))}

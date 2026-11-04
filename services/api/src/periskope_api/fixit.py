@@ -6,6 +6,7 @@ No `from __future__ import annotations` here: FastAPI resolves the closure-local
 
 import base64
 import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -15,7 +16,7 @@ from urllib.parse import urlencode
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from periskope_core.settings import Instance, env, instances, queue, secret
 from periskope_db import Viewer, runs
@@ -23,6 +24,8 @@ from periskope_fixes import FIXES, FixError, Target, UserGitLab
 from pydantic import BaseModel, Field
 
 STATE_TTL_S = 600
+# Ties the GitLab answer to the browser that asked: a login link sent to someone else completes nothing.
+BIND_COOKIE = "periskope_fixit"
 # Premium and Ultimate fixes need a licensed instance; CE has neither feature.
 NEEDS_LICENCE = {"Premium", "Ultimate"}
 
@@ -95,25 +98,31 @@ def router(state: dict[str, Any], current, audit, project_row) -> APIRouter:
         return_to: str = Field("/", max_length=500)
 
     @r.post("/fixit/{slug}/login")
-    async def login(slug: str, body: Login, me: Me) -> dict:
+    async def login(slug: str, body: Login, me: Me, response: Response) -> dict:
         inst = instance(slug)
         # Only a path of this application: never an open redirect.
         back = body.return_to if re.match(r"^/(?![/\\])", body.return_to) else "/"
         verifier = secrets.token_urlsafe(48)
         nonce = secrets.token_urlsafe(24)
-        await state["arq"].set(f"oauth:{nonce}", json.dumps({"sub": me.sub, "slug": slug, "verifier": verifier, "back": back}), ex=STATE_TTL_S)
+        bind = secrets.token_urlsafe(24)
+        await state["arq"].set(f"oauth:{nonce}", json.dumps({"sub": me.sub, "slug": slug, "verifier": verifier, "back": back,
+                                                             "bind": hashlib.sha256(bind.encode()).hexdigest()}), ex=STATE_TTL_S)
+        response.set_cookie(BIND_COOKIE, bind, max_age=STATE_TTL_S, path="/api/v1/fixit", secure=True, httponly=True, samesite="lax")
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         query = urlencode({"client_id": _secret_text(f"gitlab-oauth-{slug}", "client_id"), "redirect_uri": redirect_uri(slug), "response_type": "code",
                            "scope": "api", "state": nonce, "code_challenge": challenge, "code_challenge_method": "S256"})
         return {"url": f"{inst.url.rstrip('/')}/oauth/authorize?{query}"}
 
     @r.get("/fixit/{slug}/callback")
-    async def callback(slug: str, state_: Annotated[str, Query(alias="state")] = "", code: str = "") -> RedirectResponse:
+    async def callback(slug: str, state_: Annotated[str, Query(alias="state")] = "", code: str = "",
+                       bind: Annotated[str, Cookie(alias=BIND_COOKIE)] = "") -> RedirectResponse:
         # No bearer here (GitLab redirects the browser): the single-use state is what ties this code to a Keycloak user.
         raw = await state["arq"].getdel(f"oauth:{state_}") if state_ else None
         if raw is None:
             raise HTTPException(400, "lien de connexion expiré ou déjà utilisé : recommencez depuis Periskope")
         pending = json.loads(raw)
+        if not hmac.compare_digest(hashlib.sha256(bind.encode()).hexdigest(), pending["bind"]):
+            raise HTTPException(400, "connexion GitLab commencée dans un autre navigateur : recommencez depuis Periskope")
         if pending["slug"] != slug or not code:
             raise HTTPException(400, "réponse GitLab incomplète")
         inst = instance(slug)

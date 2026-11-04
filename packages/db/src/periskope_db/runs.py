@@ -59,7 +59,7 @@ async def reusable_sonar(db: asyncpg.Pool, project_id: int, sonar_analysis_id: s
 async def succeed(
     db: asyncpg.Pool, run_id: int, *, commit_sha: str, settings_hash: str, sonar_analysis_id: str | None, results: dict[str, Any], evidence: dict[str, Any],
     score: float | None, coverage: float, by_dimension: dict[str, Any], statuses: dict[str, Any], reused_from: int | None,
-    gitlab_calls: int, fingerprint_reused: bool,
+    gitlab_calls: int, fingerprint_reused: bool, vulns: dict[str, int] | None = None, vuln_findings: list[dict[str, Any]] | None = None,
 ) -> None:
     async with db.acquire() as conn, conn.transaction():
         run = await conn.fetchrow(
@@ -80,12 +80,12 @@ async def succeed(
             )
         # Only the default branch is the project's reference.
         await conn.execute(
-            "INSERT INTO project_state (project_id, score, coverage, last_run_id, last_success_at, last_error, next_due_at, fingerprint, by_dimension, statuses)"
-            " SELECT p.id, $2, $3, $4, now(), NULL, $5, $6, $7, $8 FROM projects p WHERE p.id = $1 AND p.default_branch = $9"
+            "INSERT INTO project_state (project_id, score, coverage, last_run_id, last_success_at, last_error, next_due_at, fingerprint, by_dimension, statuses, vulns, vuln_findings)"
+            " SELECT p.id, $2, $3, $4, now(), NULL, $5, $6, $7, $8, $10, $11 FROM projects p WHERE p.id = $1 AND p.default_branch = $9"
             " ON CONFLICT (project_id) DO UPDATE SET score = $2, coverage = $3, last_run_id = $4, last_success_at = now(), last_error = NULL,"
-            " next_due_at = $5, fingerprint = $6, by_dimension = $7, statuses = $8",
+            " next_due_at = $5, fingerprint = $6, by_dimension = $7, statuses = $8, vulns = $10, vuln_findings = $11",
             run["project_id"], score, coverage, run_id, await next_due(conn, run["project_id"]), f"{commit_sha}:{settings_hash}",
-            by_dimension, statuses, run["branch"],
+            by_dimension, statuses, run["branch"], vulns, vuln_findings,
         )
 
 

@@ -14,6 +14,7 @@ import ScopePage from "./pages/Scope";
 // The admin screen is for a few people: loaded only when opened.
 const Admin = lazy(() => import("./pages/Admin"));
 const Report = lazy(() => import("./pages/Report"));
+const Vulnerabilities = lazy(() => import("./pages/Vulnerabilities"));
 import "./styles.css";
 
 const queries = new QueryClient({
@@ -43,6 +44,7 @@ function Shell() {
         <Link to="/" className="brand"><img src="/favicon.svg" alt="" width="24" height="24" /> Periskope</Link>
         <nav aria-label="Navigation principale" className="pill-nav">
           <Link to="/" aria-current={pathname === "/" || pathname.startsWith("/p/") || pathname.startsWith("/r/") ? "page" : undefined}>Tableau de bord</Link>
+          <NavLink to="/vulnerabilites">Vulnérabilités</NavLink>
           {me.data?.admin && <><NavLink to="/cadrage">Cadrage</NavLink><NavLink to="/admin">Administration</NavLink></>}
         </nav>
         <div className="user">
@@ -60,6 +62,7 @@ function Shell() {
           <Route path="/cadrage" element={<ScopePage />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/rapport" element={<Report />} />
+          <Route path="/vulnerabilites" element={<Vulnerabilities />} />
           <Route path="*" element={<p className="empty">Page introuvable.</p>} />
         </Routes>
         </Suspense>

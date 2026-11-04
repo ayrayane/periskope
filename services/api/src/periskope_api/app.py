@@ -47,7 +47,10 @@ async def lifespan(app: FastAPI):
     await state["db"].close()
 
 
-app = FastAPI(title="Periskope", lifespan=lifespan, openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs", redoc_url=None)
+# The route map is public only when asked for (development): it tells an attacker where to knock.
+DOCS = env("API_DOCS", "false") == "true"
+app = FastAPI(title="Periskope", lifespan=lifespan, openapi_url="/api/v1/openapi.json" if DOCS else None,
+              docs_url="/api/v1/docs" if DOCS else None, redoc_url=None)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 api = APIRouter(prefix="/api/v1")
 
@@ -103,7 +106,7 @@ async def project_row(me: Viewer, instance: str, path: str) -> dict:
     """A project the viewer may see; anything else is 404, since existence itself is information."""
     where, params = me.where("p", 3)
     row = await state["db"].fetchrow(
-        f"SELECT p.*, s.score, s.coverage, s.last_run_id, s.last_success_at, s.last_error, s.by_dimension, s.statuses"
+        f"SELECT p.*, s.score, s.coverage, s.last_run_id, s.last_success_at, s.last_error, s.by_dimension, s.statuses, s.vulns"
         f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE p.instance = $1 AND p.path = $2 AND {where}",
         instance, path, *params)
     if row is None or (not row["enabled"] and not me.admin):
@@ -198,7 +201,10 @@ async def list_projects(
     # Keyset on (sort key, id); NULL keys sort last.
     order = f"{key} {'DESC' if sort != 'name' else 'ASC'} NULLS LAST, p.id"
     if cursor:
-        last_key, last_id = json.loads(base64.urlsafe_b64decode(cursor))
+        try:
+            last_key, last_id = json.loads(base64.urlsafe_b64decode(cursor))
+        except (ValueError, TypeError):
+            raise HTTPException(400, "curseur invalide") from None
         if sort == "name":
             conds.append(f"(p.path, p.id) > ({arg(last_key)}, {arg(last_id)})")
         elif last_key is None:
@@ -208,7 +214,7 @@ async def list_projects(
     # The page first, then the latest run of its rows only: never one lookup per project of the whole portfolio.
     rows = await state["db"].fetch(
         f"SELECT page.*, (SELECT status FROM runs WHERE project_id = page.id AND branch = page.default_branch ORDER BY created_at DESC LIMIT 1)"
-        f" AS last_status FROM (SELECT p.id, p.instance, p.path, p.namespace_path, p.default_branch, p.target_level, s.score, s.coverage,"
+        f" AS last_status FROM (SELECT p.id, p.instance, p.path, p.namespace_path, p.default_branch, p.target_level, s.score, s.coverage, s.vulns,"
         f" s.last_success_at, s.last_error, s.last_run_id FROM projects p LEFT JOIN project_state s ON s.project_id = p.id"
         f" WHERE {' AND '.join(conds)} ORDER BY {order} LIMIT {limit + 1}) page", *params)
     items = [dict(r) for r in rows[:limit]]
@@ -220,6 +226,13 @@ async def list_projects(
     return {"items": items, "next_cursor": nxt}
 
 
+SEVERITIES = ("critical", "high", "medium", "low", "info", "unknown")
+
+
+def vuln(severity: str) -> str:
+    return f"coalesce((s.vulns->>'{severity}')::int, 0)"
+
+
 @api.get("/projects/summary")
 async def projects_summary(me: Me, instance: str | None = None, namespace: str | None = None) -> dict:
     """The portfolio's headline figures over the viewer's scope (or one instance or group of it), with the same definitions as the list filters."""
@@ -228,8 +241,16 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
         "SELECT count(*) AS total, count(s.last_run_id) AS analysed, avg(s.score) AS score, avg(s.coverage) AS coverage,"
         " count(*) FILTER (WHERE s.score < 100) AS below_target, count(*) FILTER (WHERE s.last_error IS NOT NULL) AS failed,"
         " count(*) FILTER (WHERE s.last_run_id IS NULL) AS never, count(*) FILTER (WHERE s.score >= 75) AS high,"
-        " count(*) FILTER (WHERE s.score >= 50 AND s.score < 75) AS mid, count(*) FILTER (WHERE s.score < 50) AS low"
+        " count(*) FILTER (WHERE s.score >= 50 AND s.score < 75) AS mid, count(*) FILTER (WHERE s.score < 50) AS low,"
+        f" count(s.vulns) AS vulns_measured, {', '.join(f'sum({vuln(k)}) AS vulns_{k}' for k in SEVERITIES)}"
         f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE {where}", *params)
+    # The open vulnerabilities of the scope, and the projects most exposed (critical first, then high).
+    exposed = await state["db"].fetch(
+        f"SELECT p.instance, p.path, s.vulns FROM projects p JOIN project_state s ON s.project_id = p.id"
+        f" WHERE {where} AND ({vuln('critical')} + {vuln('high')}) > 0 ORDER BY {vuln('critical')} DESC, {vuln('high')} DESC, p.path LIMIT 5", *params)
+    row = dict(row)
+    measured = row.pop("vulns_measured")
+    vulns = {k: row.pop(f"vulns_{k}") or 0 for k in SEVERITIES}
     dims = await state["db"].fetch(
         "SELECT d.key AS dimension, avg(d.value::text::float) AS score FROM projects p JOIN project_state s ON s.project_id = p.id,"
         f" jsonb_each(s.by_dimension) d WHERE {where} AND jsonb_typeof(d.value) = 'number' GROUP BY d.key ORDER BY d.key", *params)
@@ -247,8 +268,41 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
     lowest = await state["db"].fetch(
         "SELECT p.instance, p.path, s.score, s.coverage, s.last_success_at FROM projects p JOIN project_state s ON s.project_id = p.id"
         f" WHERE {where} AND s.score IS NOT NULL ORDER BY s.score, p.path LIMIT 3", *params)
-    return {**dict(row), "dimensions": {d["dimension"]: d["score"] for d in dims},
-            "gaps": [dict(g) for g in gaps], "lowest": [dict(r) for r in lowest]}
+    return {**row, "dimensions": {d["dimension"]: d["score"] for d in dims},
+            "gaps": [dict(g) for g in gaps], "lowest": [dict(r) for r in lowest],
+            # None when no project of the scope is measured (GitLab without Ultimate): unknown, not zero.
+            "vulns": {**vulns, "total": sum(vulns.values()), "projects": measured, "exposed": [dict(e) for e in exposed]} if measured else None}
+
+
+RANK = "array_position(ARRAY['critical', 'high', 'medium', 'low', 'info', 'unknown'], f->>'severity')"
+
+
+@api.get("/vulnerabilities")
+async def list_vulnerabilities(me: Me, instance: str | None = None, namespace: str | None = None, q: str | None = Query(None, max_length=100)) -> dict:
+    """Open vulnerabilities of the scope grouped by CVE (by title without one): worst severity and how many projects each touches."""
+    where, params = scoped(me, instance, namespace)
+    measured = await state["db"].fetchval(
+        f"SELECT count(s.vuln_findings) FROM projects p JOIN project_state s ON s.project_id = p.id WHERE {where}", *params)
+    if q:
+        params.append(q)
+        where += f" AND (strpos(lower(f->>'key'), lower(${len(params)})) > 0 OR strpos(lower(f->>'title'), lower(${len(params)})) > 0)"
+    # shortcut: the 1 000 most severe and widespread; a search narrows the rest.
+    rows = await state["db"].fetch(
+        f"SELECT f->>'key' AS key, bool_or((f->>'cve')::boolean) AS cve, min(f->>'title') AS title, min({RANK}) AS rank, count(*) AS projects"
+        f" FROM projects p JOIN project_state s ON s.project_id = p.id, jsonb_array_elements(s.vuln_findings) f WHERE {where}"
+        " GROUP BY 1 ORDER BY rank, projects DESC, key LIMIT 1000", *params)
+    return {"measured": measured, "items": [{**{k: r[k] for k in ("key", "cve", "title", "projects")}, "severity": SEVERITIES[r["rank"] - 1]} for r in rows]}
+
+
+@api.get("/vulnerabilities/projects")
+async def vulnerability_projects(me: Me, key: str = Query(..., max_length=300), instance: str | None = None, namespace: str | None = None) -> list[dict]:
+    """The scope's projects where this CVE (or finding title) is open."""
+    where, params = scoped(me, instance, namespace)
+    params.append(key)
+    rows = await state["db"].fetch(
+        f"SELECT p.instance, p.path, s.score, s.coverage, f->>'severity' AS severity, f->>'type' AS type FROM projects p JOIN project_state s ON s.project_id = p.id,"
+        f" jsonb_array_elements(s.vuln_findings) f WHERE {where} AND f->>'key' = ${len(params)} ORDER BY {RANK}, p.instance, p.path LIMIT 1000", *params)
+    return [dict(r) for r in rows]
 
 
 @api.get("/projects/trend")

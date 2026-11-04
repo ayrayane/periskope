@@ -11,7 +11,7 @@ import asyncpg
 import periskope_checks
 import structlog
 from periskope_checks import REGISTRY, run_all
-from periskope_checks.context import Context
+from periskope_checks.context import Context, nodes
 from periskope_checks.registry import Depends
 from periskope_clients.gitlab import GitLab, SourceDown, run_calls
 from periskope_clients.sonar import SonarDown, SonarQube
@@ -35,7 +35,24 @@ ENGINE_VERSION = engine_version()
 
 
 # Live data ages without a commit; it is left out of the settings fingerprint.
-LIVE_KEYS = {"mergeRequests", "pipelines", "vulnerabilities", "lastActivityAt", "repository"}
+LIVE_KEYS = {"mergeRequests", "pipelines", "vulnerabilities", "vulnerabilitySeveritiesCount", "lastActivityAt", "repository"}
+SEVERITIES = ("critical", "high", "medium", "low", "info", "unknown")
+
+
+def findings(project: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Open vulnerabilities by CVE (by title when GitLab names no CVE), each at its worst severity: what the vulnerability page groups on.
+    shortcut: GitLab's first 100, most severe first; past 100 open findings the least severe ones are left out."""
+    found = nodes(project, "vulnerabilities")
+    if found is None:
+        return None
+    out: dict[str, dict[str, Any]] = {}
+    for v in found:
+        cve = next((i["externalId"] for i in v.get("identifiers") or [] if (i.get("externalType") or "").lower() == "cve"), None)
+        key, sev = cve or v.get("title") or "?", (v.get("severity") or "").lower()
+        sev = sev if sev in SEVERITIES else "unknown"
+        if key not in out or SEVERITIES.index(sev) < SEVERITIES.index(out[key]["severity"]):
+            out[key] = {"key": key, "cve": cve is not None, "severity": sev, "title": v.get("title") or key, "type": (v.get("reportType") or "").lower()}
+    return list(out.values())
 
 
 def settings_hash(project: dict[str, Any], approvals: Any, tokens: Any) -> str:
@@ -121,5 +138,7 @@ async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise
         score=s.score, coverage=s.coverage, by_dimension=s.by_dimension,
         statuses={a.activity: {"status": a.status, "to_confirm": a.to_confirm} for a in s.activities},
         reused_from=same or None, gitlab_calls=calls[0], fingerprint_reused=bool(same),
+        # None without Ultimate: "not measured", never zero.
+        vulns=project.get("vulnerabilitySeveritiesCount"), vuln_findings=findings(project),
     )
     log.info("run_succeeded", score=s.score, coverage=s.coverage, reused=len(reused_ids), calls=calls[0])

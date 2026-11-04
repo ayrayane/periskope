@@ -56,9 +56,16 @@ export type ActivityStatus = "implemented" | "partial" | "not_implemented" | "un
 export interface Instance { slug: string; name: string; url: string; enterprise: boolean; last_sync_at: string | null }
 export interface Group { instance: string; path: string; projects: number; analysed: number; score_sum: number }
 
+export interface Vulns { critical: number; high: number; medium: number; low: number; info: number; unknown: number }
+
+export interface VulnItem { key: string; cve: boolean; title: string; severity: keyof Vulns; projects: number }
+export interface VulnProject { instance: string; path: string; score: number | null; coverage: number | null; severity: keyof Vulns; type: string }
+
 export interface Summary { total: number; analysed: number; score: number | null; coverage: number | null; below_target: number; failed: number; never: number; high: number; mid: number; low: number; dimensions: Record<string, number>;
   gaps: { activity: string; level: number; missing: number; measured: number }[];
-  lowest: { instance: string; path: string; score: number; coverage: number; last_success_at: string | null }[] }
+  lowest: { instance: string; path: string; score: number; coverage: number; last_success_at: string | null }[];
+  // null: no project of the scope measured (GitLab without Ultimate).
+  vulns: (Vulns & { total: number; projects: number; exposed: { instance: string; path: string; vulns: Vulns }[] }) | null }
 
 export interface ProjectRow {
   id: number;
@@ -74,6 +81,7 @@ export interface ProjectRow {
   last_error: string | null;
   last_run_id: number | null;
   last_status: string | null;
+  vulns: Vulns | null;
 }
 
 export interface CheckResult {

@@ -119,6 +119,8 @@ def test_api_scope_and_launch_rules(client):
     sub = f"s-{uuid.uuid4().hex}"  # the hourly quota lives in Valkey, across test sessions
     client.who["v"] = Viewer(sub, "alice", namespaces=frozenset({("gl", "team-a")}))
     paths = [p["path"] for p in client.get("/api/v1/projects").json()["items"]]
+    # A tampered cursor is a bad request, not a crash.
+    assert all(client.get(f"/api/v1/projects?cursor={c}").status_code == 400 for c in ("xx", "NQ==", "W10="))
     summary = client.get("/api/v1/projects/summary").json()
     assert summary["total"] == len(paths) and isinstance(summary["dimensions"], dict)
     assert all(g["missing"] <= g["measured"] for g in summary["gaps"]) and len(summary["lowest"]) <= 3
@@ -183,6 +185,13 @@ async def test_sync_projects_applies_exclusions(db, tmp_path):
     # Projects no longer listed are disabled, their history kept.
     assert rows["team-ab/other"] == (False, "supprimé ou sorti des groupes suivis")
     assert result["seen"] == 5
+
+    # A listing cut short (page limit reached) retires none of the projects it did not reach.
+    async def cut(*a, **kw):
+        return [p(7, "team-a/app")], True
+    gl.pages = cut
+    assert (await sync_projects(db, gl, instance))["truncated"]
+    assert await db.fetchval("SELECT enabled FROM projects WHERE path = 'team-a/sub/lib'")
 
 
 def test_scope_api(client, db, tmp_path):
@@ -314,6 +323,33 @@ def test_score_drop_alert_is_posted_once(database_url, tmp_path, monkeypatch):
     assert "team-z/api" in body and "90" in body and "70" in body and "https://periskope.example.org/p/gl/team-z/api" in body
 
 
+def test_stuck_run_no_longer_blocks_its_project(database_url):
+    import asyncio
+
+    from periskope_db import runs
+    from periskope_scheduler import app as scheduler
+
+    class Queue:
+        async def enqueue_job(self, *a, **kw):
+            return None
+
+    async def scenario():
+        pool = await connect(database_url)
+        await bootstrap(pool, {"gl": INSTANCE})
+        pid = await pool.fetchval("INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch)"
+                                  " VALUES ('gl', 9902, 'team-z/stuck', 'team-z', 'group', 'main') RETURNING id")
+        # Its collector died three hours ago, mid-run.
+        await pool.execute("INSERT INTO runs (project_id, branch, trigger, status, created_at, started_at, referential_version)"
+                           " VALUES ($1, 'main', 'nightly', 'running', now() - interval '3 hours', now() - interval '3 hours', '5.0.2')", pid)
+        scheduler.state.update(db=pool, arq=Queue())
+        await scheduler.catch_up()
+        run_id = await runs.create(pool, pid, "main", "user", "alice")  # would raise AlreadyActive before
+        await pool.close()
+        return run_id
+
+    assert asyncio.run(scenario())
+
+
 def test_scheduler_metrics(database_url):
     import asyncio
 
@@ -374,7 +410,21 @@ def test_other_team_reaches_nothing(client, db, tmp_path):
     rows = client.get("/api/v1/projects/export.csv?detail=true").text
     assert "team-ab/other" in rows and "team-a/app" not in rows
     assert [r["key"] for r in client.get("/api/v1/groups/heatmap?instance=gl").json()["rows"]] == ["team-ab"]
-    assert client.get("/api/v1/projects/summary").json()["total"] == 1
+    summary = client.get("/api/v1/projects/summary").json()
+    assert summary["total"] == 1
+    # Open vulnerabilities add up over the viewer's scope only, and name only their projects.
+    assert summary["vulns"]["total"] == 4 and summary["vulns"]["projects"] == 1
+    assert [e["path"] for e in summary["vulns"]["exposed"]] == ["team-ab/other"]
+    vulns = client.get("/api/v1/vulnerabilities").json()
+    assert vulns["measured"] == 1 and [(v["key"], v["severity"], v["projects"]) for v in vulns["items"]] == [("CVE-2021-44228", "critical", 1), ("Weak hash", "low", 1)]
+    assert [v["key"] for v in client.get("/api/v1/vulnerabilities?q=log4").json()["items"]] == ["CVE-2021-44228"]
+    assert [r["path"] for r in client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()] == ["team-ab/other"]
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
+    assert client.get("/api/v1/projects/summary").json()["vulns"]["critical"] == 2
+    assert [r["path"] for r in client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()] == ["team-a/app", "team-ab/other"]
+    assert client.get("/api/v1/vulnerabilities?instance=gl&namespace=teamxa").json() == {"measured": 0, "items": []}
+    assert client.get("/api/v1/projects/summary?instance=gl&namespace=teamxa").json()["vulns"] is None  # never measured: unknown, not 0
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "bob", namespaces=frozenset({("gl", "team-ab")}))
 
     # A project no longer tracked stays out of reach, its analyses included.
     async def disable():

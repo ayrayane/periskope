@@ -6,6 +6,7 @@ import { scopeQuery, HeatmapCard, TrendCard } from "../components/Pilot";
 import { useScopeData } from "../components/GroupNav";
 import { Skeleton, when } from "../components/status";
 import { dimension, practice } from "../labels";
+import { NOT_MEASURED, urgent } from "../components/Vulns";
 
 async function allProjects(qs: string): Promise<ProjectRow[]> {
   const out: ProjectRow[] = [];
@@ -71,6 +72,31 @@ export default function Report() {
             <tr><td>Jamais analysés</td><td>{s.never}</td><td>{pct(s.never)} %</td></tr>
           </tbody>
         </table>
+      </section>
+
+      <section className="report-block">
+        <h2>Vulnérabilités ouvertes</h2>
+        {!s.vulns ? <p>{NOT_MEASURED}</p> : (
+          <>
+            <p>{s.vulns.total} vulnérabilité{s.vulns.total > 1 ? "s" : ""} ouverte{s.vulns.total > 1 ? "s" : ""} sur la branche de référence de {s.vulns.projects} projet{s.vulns.projects > 1 ? "s" : ""} mesuré{s.vulns.projects > 1 ? "s" : ""}.</p>
+            <table className="report-table">
+              <thead><tr><th scope="col">Sévérité</th><th scope="col">Vulnérabilités</th></tr></thead>
+              <tbody>
+                <tr><td>Critiques</td><td>{s.vulns.critical}</td></tr>
+                <tr><td>Hautes</td><td>{s.vulns.high}</td></tr>
+                <tr><td>Moyennes</td><td>{s.vulns.medium}</td></tr>
+                <tr><td>Basses</td><td>{s.vulns.low}</td></tr>
+                <tr><td>Autres</td><td>{s.vulns.info + s.vulns.unknown}</td></tr>
+              </tbody>
+            </table>
+            {s.vulns.exposed.length > 0 && (
+              <table className="report-table">
+                <thead><tr><th scope="col">Projets les plus exposés</th><th scope="col">Instance</th><th scope="col">Critiques et hautes</th></tr></thead>
+                <tbody>{s.vulns.exposed.map((e) => <tr key={`${e.instance}/${e.path}`}><td>{e.path}</td><td>{instances.find((i) => i.slug === e.instance)?.name ?? e.instance}</td><td>{urgent(e.vulns)}</td></tr>)}</tbody>
+              </table>
+            )}
+          </>
+        )}
       </section>
 
       <section className="report-block">

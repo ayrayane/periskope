@@ -40,7 +40,7 @@ class Viewer:
         pr = sorted(self.projects)
         sql = (
             f"(EXISTS (SELECT 1 FROM unnest(${start}::text[], ${start + 1}::text[]) AS v(i, n)"
-            f" WHERE {alias}.instance = v.i AND ({alias}.namespace_path = v.n OR left({alias}.namespace_path, length(v.n) + 1) = v.n || '/'))"
+            f" WHERE {alias}.instance = v.i AND (v.n = '' OR {alias}.namespace_path = v.n OR left({alias}.namespace_path, length(v.n) + 1) = v.n || '/'))"
             f" OR ({alias}.instance, {alias}.gitlab_id) IN (SELECT * FROM unnest(${start + 2}::text[], ${start + 3}::bigint[])))"
         )
         return sql, [[i for i, _ in ns], [n for _, n in ns], [i for i, _ in pr], [g for _, g in pr]]
@@ -48,4 +48,4 @@ class Viewer:
     def can_maintain(self, instance: str, path: str) -> bool:
         if self.admin:
             return True
-        return any(i == instance and (path == p or path.startswith(p + "/")) for i, p in self.maintains)
+        return any(i == instance and (p == "" or path == p or path.startswith(p + "/")) for i, p in self.maintains)

@@ -91,7 +91,7 @@ export default function GroupNav({ instance, namespace }: { instance?: string; n
               <button type="button" className="nav-toggle" aria-expanded={open.has(i.slug)} aria-label={`${open.has(i.slug) ? "Replier" : "Déplier"} ${i.name}`} onClick={() => toggle(i.slug)}>›</button>
               <Link to={scopeUrl(i.slug)} aria-current={current ? "page" : undefined}>
                 <span className="nav-inst-name">{i.name}</span>
-                <span className="nav-host">{new URL(i.url).host}</span>
+                <span className="nav-host" title={new URL(i.url).host}>{new URL(i.url).host}</span>
               </Link>
               <ScoreChip n={tree} />
             </div>

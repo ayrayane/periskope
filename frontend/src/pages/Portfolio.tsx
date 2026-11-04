@@ -9,6 +9,7 @@ import { Help } from "../components/Help";
 import { ExportBar, HeatmapCard, TrendCard } from "../components/Pilot";
 import Radar from "../components/Radar";
 import { Score, Skeleton, when } from "../components/status";
+import { NOT_MEASURED, urgent, VulnBar } from "../components/Vulns";
 import { dimension, practice } from "../labels";
 
 type Sort = "name" | "score" | "last_run";
@@ -189,7 +190,8 @@ export default function Portfolio() {
                   style={{ position: "absolute", top: 0, transform: `translateY(${v.start}px)`, width: "100%" }}>
                   <div role="cell" className="name">
                     <Link to={`/p/${p.instance}/${p.path}`}>{p.path.split("/").at(-1)}</Link>
-                    <span className="muted small">{instances.find((i) => i.slug === p.instance)?.name ?? p.instance} · {p.namespace_path}</span>
+                    <span className="muted small" title={p.path}>{instances.find((i) => i.slug === p.instance)?.name ?? p.instance} · {p.namespace_path}</span>
+                    {p.vulns && urgent(p.vulns) && <span className="badge tone-fail vuln-badge">{urgent(p.vulns)}</span>}
                   </div>
                   <div role="cell"><Score score={p.score} coverage={p.coverage} /></div>
                   <div role="cell" className="num-cell">{when(p.last_success_at)}</div>
@@ -228,8 +230,40 @@ export default function Portfolio() {
           {tile("below_target", "amber", s?.below_target)}
           {tile("failed", "neutral", s?.failed)}
           {tile("never", "unknown", s?.never)}
+          <a href="#vulns" className={`kpi ${s?.vulns?.critical ? "kpi-fail" : "kpi-amber"}`}>
+            <span className="kpi-value">{s?.vulns ? s.vulns.total : "—"}</span>
+            <span className="kpi-label">Vulnérabilités ouvertes<span className="kpi-sub">{s?.vulns ? urgent(s.vulns) || "aucune critique ni haute" : "non mesurées"}</span></span>
+          </a>
         </div>
       </div>
+      {/* Open vulnerabilities come first, whatever the size of the scope. */}
+      {s && s.total > 0 && (
+      <section className="card vulns" id="vulns" aria-labelledby="vulns-title">
+        <h2 id="vulns-title">Vulnérabilités ouvertes</h2>
+        <p className="card-sub">CVE et autres failles détectées par les scanners de GitLab (dépendances, conteneurs, SAST, DAST), non corrigées ni écartées
+          {s.vulns && <> · {s.vulns.projects} projet{s.vulns.projects > 1 ? "s" : ""} mesuré{s.vulns.projects > 1 ? "s" : ""} sur {s.total}</>}</p>
+        {!s.vulns ? <p className="muted">{NOT_MEASURED}</p> : (
+          <div className="vulns-body">
+            <div><VulnBar v={s.vulns} /></div>
+            <div>
+              <h3 className="vulns-sub">Projets les plus exposés</h3>
+              {s.vulns.exposed.length === 0 ? <p className="muted">Aucune vulnérabilité critique ou haute.</p> : (
+                <ul className="exposed">
+                  {s.vulns.exposed.map((e) => (
+                    <li key={`${e.instance}/${e.path}`}>
+                      <Link to={`/p/${e.instance}/${e.path}`}>{e.path.split("/").at(-1)}</Link>
+                      <span className="muted small" title={e.path}>{e.path}</span>
+                      <span className="badge tone-fail">{urgent(e.vulns)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+        {s.vulns && <p className="card-more"><Link to={`/vulnerabilites${scopeQs ? `?${scopeQs}` : ""}`}>Voir les vulnérabilités par CVE et les projets touchés →</Link></p>}
+      </section>
+      )}
       {few ? <>{myProjects}{cards}</> : <>{cards}{myProjects}</>}
     </section>
     </div>

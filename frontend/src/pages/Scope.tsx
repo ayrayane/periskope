@@ -49,7 +49,7 @@ export function ScopeEditor({ where, canEdit }: { where: Where; canEdit: boolean
     <section aria-label="Cadrage du périmètre">
       <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="search"><span className="sr-only">Filtrer</span>
-          <input type="search" placeholder="Filtrer les preuves et activités" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} />
+          <input type="search" placeholder="Preuve ou activité" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} />
         </label>
         <label className="chip">Type
           <select value={filter.target} onChange={(e) => setFilter({ ...filter, target: e.target.value })}>
@@ -98,7 +98,7 @@ export function ScopeEditor({ where, canEdit }: { where: Where; canEdit: boolean
               <td>{r.reason ?? <span className="muted">—</span>}</td>
               <td className="small">
                 {r.level === "défaut" ? <span className="muted">par défaut</span> : <>
-                  {r.inherited ? `héritée (${r.level})` : r.level}{r.author && <span className="muted"> · {r.author}, {when(r.updated_at)}</span>}
+                  {r.inherited ? `héritée (${r.level})` : r.level}{r.author && <span className="muted"> · {r.author}{r.updated_at && `, ${when(r.updated_at)}`}</span>}
                 </>}
                 {canEdit && !r.inherited && r.level === here && <> <button type="button" className="link" aria-label={`Retirer la décision sur ${r.target_id}`} onClick={() => withdraw.mutate(r)}>retirer</button></>}
               </td>

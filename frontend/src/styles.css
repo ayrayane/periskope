@@ -192,6 +192,7 @@ h2 { font-weight: 750; letter-spacing: -0.01em; }
 .hero h1 { font-size: clamp(2rem, 4vw, 2.9rem); letter-spacing: -0.03em; }
 .hero-sub { margin: 0; color: var(--muted); }
 .kpis { display: grid; grid-template-columns: 1.4fr repeat(3, 1fr); gap: 14px; }
+a.kpi { text-decoration: none; }
 .kpi { --tone: var(--accent); --tone-bg: var(--accent-soft); position: relative; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 16px 18px 16px 22px; background: var(--surface); color: var(--ink); text-align: left; font: inherit; transition: transform 0.2s ease, box-shadow 0.2s ease; }
 .kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; background: var(--tone); }
 button.kpi:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgb(15 30 61 / 0.12); }
@@ -440,7 +441,7 @@ button.nav-toggle[aria-expanded="true"] { transform: rotate(90deg); }
 .gitlab-link { padding: 6px 14px; border-radius: 999px; background: var(--card); color: var(--ink); font-size: 0.85rem; font-weight: 650; text-decoration: none; box-shadow: 0 2px 10px rgb(20 20 40 / 0.06); }
 .gitlab-link:hover { color: var(--accent); }
 .dash { grid-template-columns: minmax(240px, 0.85fr) 1fr 1fr; }
-.kpis { grid-template-columns: 1.3fr repeat(3, 1fr); }
+.kpis { grid-template-columns: 1.3fr repeat(4, 1fr); }
 @media (max-width: 1100px) { .with-nav { grid-template-columns: 1fr; } .group-nav { position: static; max-height: none; } }
 .overview { grid-template-columns: 1fr; }
 .overview .radar svg { max-height: 340px; }
@@ -556,3 +557,53 @@ table.t-fixed td { overflow-wrap: anywhere; }
 .trend-chart .axis { fill: var(--muted); font-size: 10px; }
 .report-summary { margin: 0; padding: 14px 18px; border-radius: 16px; background: var(--card); font-size: 1.02rem; line-height: 1.6; box-shadow: 0 2px 16px rgb(20 20 40 / 0.05); }
 @media print { .no-print { display: none !important; } .report-summary { border: 1px solid #ccc; box-shadow: none; } }
+
+/* Open vulnerabilities: severity tones from the vivid scale, every count also written beside its swatch. */
+:root { --sev-critical: #a1001a; --sev-medium: #f2c200; --sev-low: #7aa7d9; }
+@media (prefers-color-scheme: dark) { :root { --sev-critical: #ff6b7a; --sev-medium: #ffd60a; --sev-low: #5e8fc7; } }
+.sev-critical { background: var(--sev-critical); } .sev-high { background: var(--vivid-fail); } .sev-medium { background: var(--sev-medium); }
+.sev-low { background: var(--sev-low); } .sev-other { background: var(--vivid-none); }
+.vulns { margin-bottom: 18px; }
+.vulns-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.sev-bands { margin-top: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.vulns-sub { font-size: 0.9rem; font-weight: 650; margin: 0 0 10px; }
+.exposed { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.exposed li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; }
+.exposed .badge { white-space: nowrap; }
+.exposed .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vuln-badge { align-self: flex-start; margin-top: 4px; font-size: 0.75rem; }
+.vulns-project { margin-bottom: 20px; }
+.vulns-project h2 .muted { font-weight: 500; margin-left: 6px; }
+.vulns-project > a { display: inline-block; margin-top: 12px; }
+@media (max-width: 860px) { .vulns-body { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(2, 1fr); } }
+
+/* Vulnerability page: the list of CVEs on the left, the projects of the chosen one on the right. */
+.vulns-split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.vuln-detail { position: sticky; top: 12px; }
+.vuln-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.vuln-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.vuln-table td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.vuln-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.vuln-table tr.selected td { background: var(--accent-soft); }
+.vuln-key { font-weight: 600; text-align: left; font-family: inherit; }
+.vuln-title { display: block; margin-top: 2px; }
+.vuln-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 4px 0 14px; }
+.sev-tag { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.card-more { margin: 14px 0 0; font-weight: 600; }
+@media (max-width: 860px) { .vulns-split { grid-template-columns: 1fr; } .vuln-detail { position: static; } }
+
+/* Layout fixes from the desktop review (1280 to 1920 px). */
+.kpi-sub { display: block; margin-top: 4px; font-size: 0.78rem; font-weight: 600; }
+.sev-bands { column-gap: 32px; }
+button.sort { text-transform: inherit; letter-spacing: inherit; font-size: inherit; }
+.t-acts th:nth-child(3) { width: 210px; }
+/* A reader who cannot launch analyses has nothing in the run bar: no empty band under the header. */
+.run-bar:not(:has(button, .badge)) { min-height: 0; margin: 0 0 20px; }
+/* Narrow "À surveiller" column: the score goes under the date instead of spilling out of the card. */
+.pastel-foot { flex-wrap: wrap; }
+.pastel > * { min-width: 0; }
+.pastel-path { overflow-wrap: anywhere; }
+.pastel-foot .score { margin-left: auto; }
+/* Below 1400 px the heatmap needs the full width to show every dimension. */
+@media (min-width: 1001px) and (max-width: 1400px) { .dash { grid-template-areas: "watch wide wide" "watch gaps dist" "heat heat heat" "trend trend trend"; } .trend-chart { max-width: 720px; } }
+.report-table + .report-table { margin-top: 16px; }

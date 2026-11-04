@@ -32,7 +32,7 @@ export const INSTANCES = SITES.map((c, k) => ({
 
 const MESSAGES: Record<Status, (c: Check) => string> = {
   pass: (c) => `constaté : ${c.title.charAt(0).toLowerCase() + c.title.slice(1)}`,
-  fail: (c) => `non constaté : ${c.title.charAt(0).toLowerCase() + c.title.slice(1)}`,
+  fail: (c) => `non constaté : ${/^.[a-zà-ÿ]/.test(c.title) ? c.title.charAt(0).toLowerCase() + c.title.slice(1) : c.title}`,
   unknown: (c) => (c.source === "SonarQube" ? "SonarQube non configuré pour cette instance" : "source indisponible lors de l'analyse"),
   not_applicable: () => "sans objet pour ce projet",
 };
@@ -79,6 +79,36 @@ function score(results: Record<string, { status: Status }>) {
   };
 }
 
+/** Open vulnerabilities as GitLab Ultimate counts them: the weaker the project, the more and the more severe. */
+function drawVulns(weakness: number, r: () => number) {
+  const n = (scale: number) => Math.floor(r() * r() * scale * weakness);
+  return { critical: n(4), high: n(14), medium: n(30), low: n(25), info: n(8), unknown: n(3) };
+}
+
+// Well-known CVEs and scanner findings: each project draws some of those its severity counts allow.
+const CATALOGUE: [key: string, sev: "critical" | "high" | "medium" | "low", title: string, type: string, odds: number][] = [
+  ["CVE-2021-44228", "critical", "Log4Shell : exécution de code à distance dans log4j-core", "dependency_scanning", 0.45],
+  ["CVE-2022-22965", "critical", "Spring4Shell : exécution de code dans spring-beans", "dependency_scanning", 0.25],
+  ["CVE-2022-42889", "critical", "Text4Shell : interpolation dangereuse dans commons-text", "dependency_scanning", 0.2],
+  ["CVE-2024-3094", "critical", "Porte dérobée dans xz-utils 5.6.0 et 5.6.1", "container_scanning", 0.12],
+  ["CVE-2023-44487", "high", "HTTP/2 Rapid Reset : déni de service", "dependency_scanning", 0.5],
+  ["CVE-2023-4863", "high", "Dépassement de tas dans libwebp", "container_scanning", 0.35],
+  ["CVE-2024-21626", "high", "runc : évasion de conteneur (Leaky Vessels)", "container_scanning", 0.3],
+  ["CVE-2021-23337", "high", "Injection de commande dans lodash", "dependency_scanning", 0.3],
+  ["CVE-2022-24999", "high", "Pollution de prototype dans qs", "dependency_scanning", 0.25],
+  ["Mot de passe codé en dur", "high", "Mot de passe codé en dur", "secret_detection", 0.2],
+  ["CVE-2023-26136", "medium", "Pollution de prototype dans tough-cookie", "dependency_scanning", 0.4],
+  ["CVE-2024-28849", "medium", "follow-redirects divulgue l'en-tête Proxy-Authorization", "dependency_scanning", 0.35],
+  ["Algorithme de hachage faible (MD5)", "medium", "Algorithme de hachage faible (MD5)", "sast", 0.3],
+  ["CVE-2020-8908", "low", "Guava : répertoire temporaire lisible par tous", "dependency_scanning", 0.3],
+  ["En-tête Content-Security-Policy absent", "low", "En-tête Content-Security-Policy absent", "dast", 0.25],
+];
+
+function drawFindings(v: ReturnType<typeof drawVulns> | null, r: () => number) {
+  return v && CATALOGUE.filter(([, sev, , , odds]) => v[sev] > 0 && r() < odds)
+    .map(([key, severity, title, type]) => ({ key, cve: key.startsWith("CVE-"), severity, title, type }));
+}
+
 type Demo = ReturnType<typeof makeProject>;
 function makeProject(id: number, inst: (typeof INSTANCES)[number], n: number, groups: string[], bias: number, r: () => number) {
   const ns = groups[Math.floor(r() * groups.length)];
@@ -89,6 +119,7 @@ function makeProject(id: number, inst: (typeof INSTANCES)[number], n: number, gr
   const s = never ? null : score(results);
   const lastAt = NOW - Math.floor(r() * 10 * DAY) - 3600_000;
   const failed = !never && r() < 0.05;
+  const vulns = never || !inst.enterprise ? null : drawVulns(1 - quality, r);
   const history = never ? [] : Array.from({ length: 6 }, (_, k) => {
     const sc = Math.max(0, Math.min(100, (s!.score ?? 0) - (5 - k) * (r() * 4) + (r() - 0.5) * 3));
     return { id: id * 100 + k, branch: "main", commit_sha: Math.floor(r() * 2 ** 48).toString(16).padStart(12, "0") + "abcd1234",
@@ -101,6 +132,7 @@ function makeProject(id: number, inst: (typeof INSTANCES)[number], n: number, gr
     score: s?.score ?? null, coverage: s?.coverage ?? null, by_dimension: s?.by_dimension ?? null, statuses: s?.statuses ?? null,
     last_success_at: never ? null : iso(lastAt), last_error: failed ? "GitLab indisponible (503)" : null,
     last_run_id: never ? null : id * 100 + 5, last_status: "succeeded", results: never ? null : results, history,
+    vulns, findings: drawFindings(vulns, r),
   };
 }
 
@@ -116,7 +148,7 @@ const PROJECTS: Demo[] = (() => {
   return out;
 })();
 
-const row = ({ results, history, statuses, ...p }: Demo) => p;
+const row = ({ results, history, statuses, findings, ...p }: Demo) => p;
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const inScope = (q: URLSearchParams) => PROJECTS.filter((p) => (!q.get("instance") || p.instance === q.get("instance"))
   && (!q.get("namespace") || p.namespace_path === q.get("namespace") || p.namespace_path.startsWith(q.get("namespace") + "/")));
@@ -126,6 +158,17 @@ function roadmap(p: Demo) {
     .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
     .map((a) => ({ activity: a.name, dimension: a.dimension, level: a.level, status: p.statuses![a.name].status, blocked_by: [],
       steps: CHECKS.filter((c) => c.activity === a.name && p.results?.[c.id]?.status === "fail").map((c) => ({ check: c.id, action: c.action, message: p.results![c.id].message })) }));
+}
+
+const SEV = ["critical", "high", "medium", "low", "info", "unknown"] as const;
+function vulnSummary(items: Demo[]) {
+  const measured = items.filter((x) => x.vulns);
+  if (!measured.length) return null;
+  const sums = Object.fromEntries(SEV.map((k) => [k, measured.reduce((s, x) => s + x.vulns![k], 0)])) as Record<(typeof SEV)[number], number>;
+  const exposed = measured.filter((x) => x.vulns!.critical + x.vulns!.high > 0)
+    .sort((a, b) => b.vulns!.critical - a.vulns!.critical || b.vulns!.high - a.vulns!.high || a.path.localeCompare(b.path)).slice(0, 5)
+    .map(({ instance, path, vulns }) => ({ instance, path, vulns: vulns! }));
+  return { ...sums, total: SEV.reduce((s, k) => s + sums[k], 0), projects: measured.length, exposed };
 }
 
 class DemoError extends Error {
@@ -203,7 +246,24 @@ function route(path: string, method: string): unknown {
       high: sc.filter((x) => x.score! >= 75).length, mid: sc.filter((x) => x.score! >= 50 && x.score! < 75).length, low: sc.filter((x) => x.score! < 50).length,
       dimensions: Object.fromEntries(dims.map((d) => [d, avg(sc.map((x) => x.by_dimension![d]).filter((v): v is number => v != null)) ?? 0])),
       gaps, lowest: [...sc].sort((a, b) => a.score! - b.score!).slice(0, 3).map(({ instance, path, score, coverage, last_success_at }) => ({ instance, path, score, coverage, last_success_at })),
+      vulns: vulnSummary(items),
     };
+  }
+  if (p === "/vulnerabilities") {
+    const measured = inScope(q).filter((x) => x.findings), needle = q.get("q")?.toLowerCase();
+    const groups = new Map<string, { key: string; cve: boolean; title: string; severity: string; projects: number }>();
+    for (const f of measured.flatMap((x) => x.findings!)) {
+      if (needle && !f.key.toLowerCase().includes(needle) && !f.title.toLowerCase().includes(needle)) continue;
+      const g = groups.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, projects: 0 };
+      g.projects++;
+      groups.set(f.key, g);
+    }
+    const rank = (s: string) => SEV.indexOf(s as (typeof SEV)[number]);
+    return { measured: measured.length, items: [...groups.values()].sort((a, b) => rank(a.severity) - rank(b.severity) || b.projects - a.projects || a.key.localeCompare(b.key)) };
+  }
+  if (p === "/vulnerabilities/projects") {
+    return inScope(q).flatMap((x) => (x.findings ?? []).filter((f) => f.key === q.get("key")).map((f) => ({ instance: x.instance, path: x.path, score: x.score, coverage: x.coverage, severity: f.severity, type: f.type })))
+      .sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity) || a.instance.localeCompare(b.instance) || a.path.localeCompare(b.path));
   }
   if (p === "/projects/trend") {
     const sc = inScope(q).filter((x) => x.score != null), now = avg(sc.map((x) => x.score!)) ?? 0;

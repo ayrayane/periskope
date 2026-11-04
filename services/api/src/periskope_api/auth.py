@@ -58,7 +58,8 @@ class Verifier:
     def role(self, claims: dict) -> str:
         """Client and realm roles, translated by PERISKOPE_ROLE_MAP (e.g. {"manager": "auditor", "user": "viewer"}), highest wins."""
         roles = set((claims.get("resource_access", {}).get(self.settings.client_id) or {}).get("roles", []))
-        roles |= set(claims.get("realm_access", {}).get("roles", []))
+        # A realm is often shared: its plain "admin" belongs to another application. Only periskope-* or mapped realm roles count.
+        roles |= {r for r in claims.get("realm_access", {}).get("roles", []) if r.startswith("periskope-") or r in self.role_map}
         mapped = {self.role_map.get(r, r.removeprefix("periskope-")) for r in roles}
         return next((r for r in reversed(ROLES) if r in mapped), "viewer")
 
@@ -86,13 +87,18 @@ async def viewer(db: asyncpg.Pool, arq: ArqRedis, verifier: Verifier, claims: di
         # Launching and scoping follow GitLab: Maintainer or Owner of the group or project, whatever the Keycloak role.
         maintains |= {(slug, path) for path in found.get("maintains", [])}
     for g in await db.fetch("SELECT instance, scope_kind, scope_value, role FROM permissions WHERE subject = $1", sub):
-        target = {(i, g["scope_value"] or "") for i in ([g["instance"]] if g["instance"] else slugs)}
-        if g["scope_kind"] in ("namespace", "project"):
-            namespaces |= target
-            if g["role"] in ("maintainer", "admin"):
-                maintains |= target
-        elif g["scope_kind"] == "all" and g["role"] == "admin" and g["instance"] is None:
+        if g["scope_kind"] == "all" and g["role"] == "admin" and g["instance"] is None:
             return Viewer(sub, username, admin=True)
+        insts = [g["instance"]] if g["instance"] else slugs
+        # "all" on an instance is the empty namespace: every project of it (see Viewer.where).
+        target = {(i, "" if g["scope_kind"] == "all" else g["scope_value"] or "") for i in insts}
+        if g["scope_kind"] == "project":
+            projects |= {(r["instance"], r["gitlab_id"]) for r in await db.fetch(
+                "SELECT instance, gitlab_id FROM projects WHERE path = $1 AND instance = ANY($2::text[])", g["scope_value"], insts)}
+        elif g["scope_kind"] in ("namespace", "all"):
+            namespaces |= target
+        if g["role"] in ("maintainer", "admin"):
+            maintains |= target
     return Viewer(sub, username, reads_all=role == "auditor", namespaces=frozenset(namespaces), projects=frozenset(projects),
                   maintains=frozenset(maintains))
 
