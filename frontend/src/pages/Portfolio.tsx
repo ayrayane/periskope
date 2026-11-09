@@ -8,15 +8,17 @@ import GroupNav, { ScopeCrumbs, useScopeData } from "../components/GroupNav";
 import { Help } from "../components/Help";
 import { ExportBar, HeatmapCard, TrendCard } from "../components/Pilot";
 import Radar from "../components/Radar";
-import { Score, Skeleton, when } from "../components/status";
-import { NOT_MEASURED, urgent, VulnBar } from "../components/Vulns";
+import { PracticeCell, PracticeCounts, Score, Skeleton, when } from "../components/status";
 import { dimension, practice } from "../labels";
 
 type Sort = "name" | "score" | "last_run";
+// What moves at a low maturity: the level-1 foundation, the trend, and what is not measured at all.
+// "Below target" says nothing when nearly every project is below it.
 const FILTERS = [
-  ["below_target", "Niveau cible non atteint"],
-  ["failed", "Analyse impossible"],
-  ["never", "Jamais analysés"],
+  ["foundation_missing", "true", "Socle niveau 1 incomplet"],
+  ["trend", "up", "En progrès sur 30 jours"],
+  ["trend", "down", "En recul sur 30 jours"],
+  ["unmeasured", "true", "Non mesurés"],
 ] as const;
 
 export default function Portfolio() {
@@ -77,11 +79,12 @@ export default function Portfolio() {
   const title = namespace ? namespace.split("/").at(-1)! : inst?.name ?? instance ?? "Tableau de bord";
   const gitlabUrl = inst && `${inst.url.replace(/\/$/, "")}/${namespace ?? ""}`;
   const s = summary.data;
-  const tile = (key: (typeof FILTERS)[number][0], tone: string, value?: number) => (
-    <button type="button" className={`kpi kpi-${tone}`} aria-pressed={params.get(key) === "true"}
-      onClick={() => set(key, params.get(key) === "true" ? null : "true")}>
-      <span className="kpi-value">{value ?? "—"}</span>
-      <span className="kpi-label">{FILTERS.find(([k]) => k === key)![1]}</span>
+  const on = (key: string, value: string) => params.get(key) === value;
+  const toggle = (key: string, value: string) => set(key, on(key, value) ? null : value);
+  const tile = (key: string, value: string, tone: string, figure: string, label: string, sub: string) => (
+    <button type="button" className={`kpi kpi-${tone}`} aria-pressed={on(key, value)} onClick={() => toggle(key, value)}>
+      <span className="kpi-value">{figure}</span>
+      <span className="kpi-label">{label}<span className="kpi-sub">{sub}</span></span>
     </button>
   );
 
@@ -121,7 +124,14 @@ export default function Portfolio() {
               </ul>
             </div>
           </section>
-          <section className="card gaps" aria-labelledby="gaps-title">
+          {s.practices && (
+            <section className="card practices-card" aria-labelledby="practices-title">
+              <h2 id="practices-title">Ce que veut dire le score moyen</h2>
+              <p className="card-sub">Pratiques attendues jusqu'au niveau cible, en moyenne par projet analysé</p>
+              <PracticeCounts p={s.practices} />
+            </section>
+          )}
+          <section className="card gaps" id="gaps" aria-labelledby="gaps-title">
             <h2 id="gaps-title">Pratiques les plus absentes</h2>
             <p className="card-sub">Part des projets mesurés où la pratique est absente ou seulement partielle, jusqu'à leur niveau cible</p>
             {s.gaps.length === 0 ? <p className="muted">Aucune pratique manquante.</p> : (
@@ -158,9 +168,9 @@ export default function Portfolio() {
           <span className="sr-only">Rechercher un projet</span>
           <input type="search" placeholder="Rechercher un projet" value={search} onChange={(e) => setSearch(e.target.value)} />
         </label>
-        {FILTERS.map(([key, label]) => (
-          <label key={key} className="chip">
-            <input type="checkbox" checked={params.get(key) === "true"} onChange={(e) => set(key, e.target.checked ? "true" : null)} />
+        {FILTERS.map(([key, value, label]) => (
+          <label key={`${key}=${value}`} className="chip">
+            <input type="checkbox" checked={on(key, value)} onChange={(e) => set(key, e.target.checked ? value : null)} />
             {label}
           </label>
         ))}
@@ -177,6 +187,7 @@ export default function Portfolio() {
           <div role="row" className="row head">
             {sortHeader("name", "Projet")}
             {sortHeader("score", "Score")}
+            <div role="columnheader">Pratiques</div>
             {sortHeader("last_run", "Dernière réussite")}
             <div role="columnheader">État</div>
           </div>
@@ -191,9 +202,9 @@ export default function Portfolio() {
                   <div role="cell" className="name">
                     <Link to={`/p/${p.instance}/${p.path}`}>{p.path.split("/").at(-1)}</Link>
                     <span className="muted small" title={p.path}>{instances.find((i) => i.slug === p.instance)?.name ?? p.instance} · {p.namespace_path}</span>
-                    {p.vulns && urgent(p.vulns) && <span className="badge tone-fail vuln-badge">{urgent(p.vulns)}</span>}
                   </div>
                   <div role="cell"><Score score={p.score} coverage={p.coverage} /></div>
+                  <div role="cell"><PracticeCell p={p.practices} /></div>
                   <div role="cell" className="num-cell">{when(p.last_success_at)}</div>
                   <div role="cell">{p.last_error ? <span className="badge tone-not_applicable" title="L'analyse n'a pas pu lire ses sources ; le score affiché est celui de la dernière analyse réussie.">Analyse impossible : {p.last_error}</span> : p.last_status === "running" || p.last_status === "queued" ? <span className="badge tone-running">En cours</span> : p.score == null ? <span className="muted small">Jamais analysé</span> : <span className="muted small">À jour</span>}</div>
                 </div>
@@ -227,43 +238,18 @@ export default function Portfolio() {
             <Score score={s?.score ?? null} coverage={s?.coverage ?? null} size="lg" />
             <span className="kpi-label">Score moyen <Help term="score" label="le score" /><br />{s ? `${s.analysed} projet${s.analysed > 1 ? "s" : ""} analysé${s.analysed > 1 ? "s" : ""} sur ${s.total}` : "…"}</span>
           </div>
-          {tile("below_target", "amber", s?.below_target)}
-          {tile("failed", "neutral", s?.failed)}
-          {tile("never", "unknown", s?.never)}
-          <a href="#vulns" className={`kpi ${s?.vulns?.critical ? "kpi-fail" : "kpi-amber"}`}>
-            <span className="kpi-value">{s?.vulns ? s.vulns.total : "—"}</span>
-            <span className="kpi-label">Vulnérabilités ouvertes<span className="kpi-sub">{s?.vulns ? urgent(s.vulns) || "aucune critique ni haute" : "non mesurées"}</span></span>
+          {tile("foundation_missing", "true", "pass", s ? `${s.foundation_ok}` : "—", "Socle niveau 1 en place",
+            s ? `sur ${s.analysed} analysés · ${s.analysed - s.foundation_ok} à compléter` : "")}
+          {tile("trend", "up", "accent", s?.compared ? `${s.improving}` : "—", "En progrès sur 30 jours",
+            s?.compared ? `${s.declining} en recul · ${s.compared} comparables` : "historique de moins de 30 jours")}
+          <a href="#gaps" className="kpi kpi-fail">
+            <span className="kpi-value">{s?.practices ? Math.round(s.practices.missing) : "—"}</span>
+            <span className="kpi-label">Pratiques absentes par projet<span className="kpi-sub">{s?.practices ? `en moyenne, sur ${Math.round(s.practices.counted)} attendues` : "aucun projet analysé"}</span></span>
           </a>
+          {tile("unmeasured", "true", "unknown", s ? `${s.unmeasured}` : "—", "Non mesurés",
+            s ? `${s.never} jamais analysés · ${s.failed} en échec` : "")}
         </div>
       </div>
-      {/* Open vulnerabilities come first, whatever the size of the scope. */}
-      {s && s.total > 0 && (
-      <section className="card vulns" id="vulns" aria-labelledby="vulns-title">
-        <h2 id="vulns-title">Vulnérabilités ouvertes</h2>
-        <p className="card-sub">CVE et autres failles détectées par les scanners de GitLab (dépendances, conteneurs, SAST, DAST), non corrigées ni écartées
-          {s.vulns && <> · {s.vulns.projects} projet{s.vulns.projects > 1 ? "s" : ""} mesuré{s.vulns.projects > 1 ? "s" : ""} sur {s.total}</>}</p>
-        {!s.vulns ? <p className="muted">{NOT_MEASURED}</p> : (
-          <div className="vulns-body">
-            <div><VulnBar v={s.vulns} /></div>
-            <div>
-              <h3 className="vulns-sub">Projets les plus exposés</h3>
-              {s.vulns.exposed.length === 0 ? <p className="muted">Aucune vulnérabilité critique ou haute.</p> : (
-                <ul className="exposed">
-                  {s.vulns.exposed.map((e) => (
-                    <li key={`${e.instance}/${e.path}`}>
-                      <Link to={`/p/${e.instance}/${e.path}`}>{e.path.split("/").at(-1)}</Link>
-                      <span className="muted small" title={e.path}>{e.path}</span>
-                      <span className="badge tone-fail">{urgent(e.vulns)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        )}
-        {s.vulns && <p className="card-more"><Link to={`/vulnerabilites${scopeQs ? `?${scopeQs}` : ""}`}>Voir les vulnérabilités par CVE et les projets touchés →</Link></p>}
-      </section>
-      )}
       {few ? <>{myProjects}{cards}</> : <>{cards}{myProjects}</>}
     </section>
     </div>

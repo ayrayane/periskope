@@ -14,7 +14,7 @@ from periskope_db import connect
 from periskope_db.bootstrap import bootstrap
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-SETTINGS = Settings(issuer="https://kc.test/realms/periskope", audience="periskope-api", client_id="periskope")
+SETTINGS = Settings(issuer="https://kc.test/realms/periskope", client_id="periskope")
 
 
 class Keys:
@@ -29,13 +29,13 @@ def verifier():
 
 
 def token(**over):
-    claims = {"iss": SETTINGS.issuer, "aud": SETTINGS.audience, "azp": "periskope", "sub": "u-1", "exp": int(time.time()) + 60,
+    claims = {"iss": SETTINGS.issuer, "aud": "account", "azp": "periskope", "sub": "u-1", "exp": int(time.time()) + 60,
               "preferred_username": "alice", "email": "alice@corp.test", "email_verified": True, **over}
     return "Bearer " + jwt.encode({k: v for k, v in claims.items() if v is not None}, KEY, algorithm="RS256")
 
 
 @pytest.mark.parametrize("bad", [
-    None, "Basic abc", token(aud="other-api"), token(iss="https://evil.test/realms/x"), token(exp=int(time.time()) - 10),
+    None, "Basic abc", token(iss="https://evil.test/realms/x"), token(exp=int(time.time()) - 10),
     token(azp="another-client"), token(sub=None),
 ])
 def test_refused_tokens(bad):
@@ -127,6 +127,14 @@ def test_hand_granted_project_and_instance(database_url):
     v, seen, total = asyncio.run(run())
     # A project grant is that project; an instance grant without a namespace is the whole instance, read only.
     assert ("gl", gid) in v.projects and seen == total and not v.maintains
+
+
+def test_admins_listed_in_the_deployment(monkeypatch):
+    monkeypatch.setenv("PERISKOPE_ADMINS", '["Alice.Martin"]')
+    v = Verifier(SETTINGS)
+    # Keycloak lowercases logins: the list is read the same way, whatever the case written in it.
+    assert v.role({"preferred_username": "alice.martin", "realm_access": {"roles": ["user"]}}) == "admin"
+    assert v.role({"preferred_username": "bob", "realm_access": {"roles": ["admin"]}}) == "viewer"
 
 
 def test_workspace_roles_mapped(database_url, monkeypatch):

@@ -11,11 +11,19 @@ class Settings(BaseModel):
     sync_at: str = Field("00:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     catch_up_at: str = Field("01:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     rollup_at: str = Field("05:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    feeds_at: str = Field("00:15", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     on_demand_per_hour: int = Field(10, ge=1, le=1000)
     evidence_days: int = Field(14, ge=1, le=90)
     branch_run_days: int = Field(30, ge=1, le=365)
     # A drop of at least this many points between two analyses of the default branch sends an alert.
     alert_drop: int = Field(5, ge=1, le=100)
+    # Correction deadlines of an open vulnerability by severity, from its first detection (24 h, 7, 30 and 90 days by default).
+    sla_critical_hours: int = Field(24, ge=1, le=720)
+    sla_high_days: int = Field(7, ge=1, le=365)
+    sla_medium_days: int = Field(30, ge=1, le=365)
+    sla_low_days: int = Field(90, ge=1, le=730)
+    # EPSS from which a CVE's exploitation is likely: its priority goes up one level (percent of probability over 30 days).
+    epss_high_pct: int = Field(10, ge=1, le=100)
 
 
 async def load(db: asyncpg.Pool | asyncpg.Connection) -> Settings:

@@ -6,8 +6,6 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from periskope_core.catalog import CHECKS
-
 
 class Target(StrEnum):
     CHECK = "check"
@@ -27,14 +25,6 @@ class ScopeDecision(BaseModel):
     # Both None: the whole organisation. instance only: that instance. Both: that project.
     instance: str | None = None
     project_id: int | None = None
-
-
-# Seeded at install: Scorecard calls external services and collectors have no Internet access.
-DEFAULTS = [
-    ScopeDecision(target=Target.CHECK, target_id=c.id, decision=Decision.EXCLUDED,
-                  reason="Scorecard interroge des services externes : les collecteurs n'ont pas d'accès Internet")
-    for c in CHECKS if c.id.startswith("scorecard.")
-]
 
 
 def effective(decisions: Iterable[ScopeDecision], instance: str | None = None, project_id: int | None = None) -> dict[tuple[Target, str], ScopeDecision]:

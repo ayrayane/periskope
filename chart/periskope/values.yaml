@@ -27,6 +27,16 @@ host: periskope.example.com
 # Score-drop alerts: name of a Secret holding the webhook in key `url` (Mattermost incoming webhook or any JSON endpoint). Empty: no alerts.
 alerts:
   secret: ""
+# Exploitation feeds read each night: they set each CVE's priority. Empty: priority follows GitLab's severity alone.
+# With Internet access (direct or through `proxy`), the official files:
+#   kevUrl:  https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+#   epssUrl: https://epss.empiricalsecurity.com/epss_scores-current.csv.gz
+# Without, a copy of those two files on an internal server. A private CA is trusted through oidc.caConfigMap.
+vulnFeeds:
+  kevUrl: ""
+  epssUrl: ""
+  proxy: ""                        # e.g. http://proxy.internal:3128, used for these two files only
+  # A URL may hold {date} (YYYY-MM-DD, UTC): the most recent of the last 7 days is read, e.g. a daily archive in Nexus.
 # Prometheus Operator resources: a ServiceMonitor (scheduler), a PodMonitor (collectors) and the spec's alert rules.
 monitoring:
   enabled: false
@@ -40,13 +50,16 @@ ingress:
 oidc:
   issuer: https://keycloak.example.com/realms/periskope
   clientId: periskope
-  audience: periskope
   # ConfigMap with a ca.crt when Keycloak or GitLab use a private CA.
   caConfigMap: ""
   # Keycloak role (realm or client) -> Periskope right: viewer (GitLab membership), auditor (reads every project, administers
   # nothing), admin. Unmapped roles named viewer/auditor/admin or periskope-<right> are taken as is.
   # Example for an LDAP-backed workspace: { manager: auditor, user: viewer }
   roleMap: {}
+
+# Periskope admins by Keycloak login, whatever their Keycloak roles; usually kept in the deployment repository (admins.yaml).
+# Logins must be unique and fixed (directory accounts, no self-registration): a login listed here is trusted as is.
+admins: []
 
 # How a Keycloak user is tied to their GitLab account on each instance.
 identity:

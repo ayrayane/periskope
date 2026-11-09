@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+**Retours UX**
+- Open vulnerabilities leave the dashboard (no tile, card or list badge): they live in the « Vulnérabilités » tab, and in a « Vulnérabilités » tab of the project page.
+- The « Vulnérabilités » tab opens on the scope's coverage: share of projects whose count can be trusted, split into « remontent des vulnérabilités », « SBOM publié, aucune vulnérabilité », « sans SBOM CycloneDX » (a zero that proves nothing) and « non mesurés »; one click lists the projects of a group. API: `vuln_coverage` on `/projects` (row and filter) and on `/projects/summary`.
+- Practices behind the score: the project page reads « 21 pratiques absentes sur 36 attendues » with partial, done and unverified counts; the project list gains a « Pratiques » column; the dashboard shows absent practices per project on average. API: `practices` on `/projects` rows and `/projects/summary`.
+
+- Dashboard tiles fit a low maturity: « Socle niveau 1 en place » (every level-1 practice implemented), « En progrès sur 30 jours » (with those in decline), « Pratiques absentes par projet », « Non mesurés » (never analysed or failing). « Niveau cible non atteint » left the tiles and filters (still in the report). API: `foundation_ok`, `improving`, `declining`, `compared`, `unmeasured` on `/projects/summary`; filters `foundation_missing`, `trend=up|down`, `unmeasured` on `/projects`.
+- Project page « Branches » tab: every GitLab branch with its latest analysis, score, gap to the reference branch and an « Analyser » button for maintainers; analysed branches since deleted stay listed. API: `GET /projects/{instance}/{path}/branch-scores`.
+
+**Vulnérabilités (gestion des CVE)**
+- Severity colours are GitLab's own (vulnerability report tokens red-800, red-600, orange-400, orange-300, blue-400), each severity shown with its CVSS range (critical 9.0–10, high 7.0–8.9, medium 4.0–6.9, low 0.1–3.9).
+- Age of each open vulnerability (from GitLab's first detection, `detectedAt`) and correction deadlines by severity: 24 h, 7, 30 and 90 days by default, admin settings `sla_*`. Counts past the deadline per severity, per CVE and per project. Dates arrive with each project's next analysis.
+- Priority of each CVE from exploitation feeds read nightly from an internal mirror (chart `vulnFeeds.kevUrl`, `vulnFeeds.epssUrl`): in CISA's KEV → critical; EPSS ≥ threshold (admin `epss_high_pct`, 10 %) → one level up; low EPSS brings a critical to high; otherwise the severity. Deadlines and « hors délai » follow the priority; « Exploitée (KEV) » badge and EPSS shown per CVE; feed dates and errors shown on the Vulnerabilities tab. Migration 0008 adds `vuln_kev`, `vuln_epss`, `vuln_feeds`.
+- Feed URLs may be the official sites, go through `vulnFeeds.proxy`, or hold `{date}` for a daily archive (most recent of the last 7 days); `docs/vuln-feeds.gitlab-ci.yml` copies both feeds into a Nexus raw repository each day.
+- Admin settings: `alert_drop` was shown but not saved; it is now.
+
+**Authentification**
+- The API no longer checks the token's audience: Keycloak needs no audience mapper. Tokens must still come from the Periskope client (`azp`), from the realm's issuer, signed and unexpired. Chart value `oidc.audience` and `PERISKOPE_OIDC_AUDIENCE` are gone (an old value is ignored).
+- Admins by Keycloak login: chart value `admins` (`PERISKOPE_ADMINS`), kept in the deployment repository's `admins.yaml`. A listed login is admin whatever its Keycloak roles; roleMap, client roles and hand grants still work.
+
+**Catalogue**
+- The 6 OpenSSF Scorecard entries are removed (never collected, duplicates of existing checks): 47 retained checks. Migration 0007 drops their scope decisions.
+
 ## 1.2.0 — 2026-11-04
 
 **Vulnérabilités**

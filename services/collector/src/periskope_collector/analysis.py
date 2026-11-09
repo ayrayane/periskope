@@ -50,8 +50,11 @@ def findings(project: dict[str, Any]) -> list[dict[str, Any]] | None:
         cve = next((i["externalId"] for i in v.get("identifiers") or [] if (i.get("externalType") or "").lower() == "cve"), None)
         key, sev = cve or v.get("title") or "?", (v.get("severity") or "").lower()
         sev = sev if sev in SEVERITIES else "unknown"
+        # The oldest detection of the key: the correction deadline runs from there.
+        seen = min(filter(None, (v.get("detectedAt"), out.get(key, {}).get("detected_at"))), default=None)
         if key not in out or SEVERITIES.index(sev) < SEVERITIES.index(out[key]["severity"]):
             out[key] = {"key": key, "cve": cve is not None, "severity": sev, "title": v.get("title") or key, "type": (v.get("reportType") or "").lower()}
+        out[key]["detected_at"] = seen
     return list(out.values())
 
 

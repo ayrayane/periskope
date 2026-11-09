@@ -8,6 +8,16 @@
     "oidc"
   ],
   "properties": {
+    "admins": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "vulnFeeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kevUrl": { "type": "string", "pattern": "^(https?://.*)?$" },
+        "epssUrl": { "type": "string", "pattern": "^(https?://.*)?$" },
+        "proxy": { "type": "string", "pattern": "^(https?://.*)?$" }
+      }
+    },
     "instances": {
       "type": "array",
       "items": {
@@ -81,8 +91,7 @@
       "type": "object",
       "required": [
         "issuer",
-        "clientId",
-        "audience"
+        "clientId"
       ],
       "properties": {
         "roleMap": {

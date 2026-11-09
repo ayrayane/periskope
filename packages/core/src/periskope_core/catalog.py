@@ -1,4 +1,4 @@
-"""The 53 retained checks, from the spec table "Les 53 preuves retenues"."""
+"""The 47 retained checks, from the spec table "Les 47 preuves retenues"."""
 import json
 from importlib.resources import files
 
@@ -10,7 +10,6 @@ CHECKS: tuple[Check, ...] = (
     Check('gitlab.ci_defined', 'Pipeline CI défini', 'API pipelines', 'Defined build process', 1, Kind.PROOF),
     Check('gitlab.ci_recent_success', 'Pipeline réussi récemment sur la branche', 'API pipelines', 'Defined build process', 1, Kind.PROOF),
     Check('gitlab.renovate', 'MR automatiques de mise à jour (Renovate/Dependabot)', 'API MR', 'Automated PRs for patches', 1, Kind.PROOF),
-    Check('scorecard.dependency_update_tool', 'Scorecard : Dependency-Update-Tool', 'Scorecard', 'Automated PRs for patches', 1, Kind.SECONDARY),
     Check('repo.patch_policy', 'Politique de patch documentée', 'Dépôt', 'A patch policy is defined', 1, Kind.HINT),
     Check('gitlab.xss_open', 'Aucune vulnérabilité XSS ouverte', 'Rapport vuln.', 'Context-aware output encoding', 1, Kind.PROOF),
     Check('gitlab.injection_open', 'Aucune injection SQL/commande ouverte', 'Rapport vuln.', 'Parametrization', 1, Kind.PROOF),
@@ -18,10 +17,8 @@ CHECKS: tuple[Check, ...] = (
     Check('gitlab.image_secret_scan', 'Scan de secrets des images', 'CI fusionnée', 'Test for stored secrets in build artifacts', 1, Kind.HINT),
     Check('sonar.false_positive', 'Faux positifs et hotspots triés', 'SonarQube', 'Simple false positive treatment', 1, Kind.PROOF),
     Check('sonar.security_gate', 'Quality gate avec condition de sécurité', 'SonarQube', 'Treatment of defects with high or critical severity', 1, Kind.HINT),
-    Check('scorecard.vulnerabilities', 'Scorecard : Vulnerabilities', 'Scorecard', 'Treatment of defects with high or critical severity', 1, Kind.SECONDARY),
     Check('repo.lockfiles', 'Fichiers de verrouillage présents', 'Dépôt', 'Pinning of artifacts', 2, Kind.PROOF),
     Check('repo.pinning_images', 'Images de base épinglées (tag ou digest)', 'Dépôt', 'Pinning of artifacts', 2, Kind.PROOF),
-    Check('scorecard.pinned_dependencies', 'Scorecard : Pinned-Dependencies', 'Scorecard', 'Pinning of artifacts', 2, Kind.SECONDARY),
     Check('gitlab.sbom_artifact', 'Artefact CycloneDX produit par le pipeline', 'Artefacts', 'SBOM of components', 2, Kind.PROOF),
     Check('gitlab.masked_secrets', 'Variables sensibles masquées', 'API variables', 'Environment depending configuration parameters (secrets)', 2, Kind.PROOF),
     Check('gitlab.automerge', 'Merge automatique des MR de dépendances', 'API MR', 'Automated merge of automated PRs', 2, Kind.HINT),
@@ -31,7 +28,6 @@ CHECKS: tuple[Check, ...] = (
     Check('gitlab.protection_requirement', 'Classification du projet (framework / topic)', 'API projet', 'Determining the protection requirement', 2, Kind.HINT),
     Check('gitlab.approvals_required', 'Au moins une approbation, auteur exclu', 'API approvals', 'Require a PR before merging', 2, Kind.PROOF),
     Check('gitlab.protected_branch_no_push', 'Branche par défaut protégée, push direct interdit', 'API branches', 'Require a PR before merging', 2, Kind.PROOF),
-    Check('scorecard.branch_protection', 'Scorecard : Branch-Protection', 'Scorecard', 'Require a PR before merging', 2, Kind.SECONDARY),
     Check('gitlab.account_inventory', 'Tokens nommés et à durée limitée', 'API tokens', 'Account inventory', 2, Kind.PROOF),
     Check('gitlab.least_privilege', 'Peu de comptes à privilèges élevés', 'API membres', 'Least-privilege access baseline', 2, Kind.PROOF),
     Check('gitlab.vuln_layers', 'Vulnérabilités mesurées sur plusieurs couches', 'Rapport vuln.', 'Number of vulnerabilities/severity/layer', 2, Kind.PROOF),
@@ -45,9 +41,7 @@ CHECKS: tuple[Check, ...] = (
     Check('gitlab.secret_push_protection', 'Secret push protection activée', 'API projet', 'Block pushes containing secrets', 3, Kind.PROOF),
     Check('gitlab.reset_approvals_on_push', 'Approbations réinitialisées à chaque push', 'API approvals', 'Dismiss stale PR approvals', 3, Kind.PROOF),
     Check('gitlab.pipeline_must_succeed', 'Merge uniquement si le pipeline réussit', 'API projet', 'Require status checks to pass', 3, Kind.PROOF),
-    Check('scorecard.ci_tests', 'Scorecard : CI-Tests', 'Scorecard', 'Require status checks to pass', 3, Kind.SECONDARY),
     Check('gitlab.approved_mrs', 'MR récentes approuvées par un tiers', 'API MR', 'Approval by reviewing any new version', 3, Kind.PROOF),
-    Check('scorecard.code_review', 'Scorecard : Code-Review', 'Scorecard', 'Approval by reviewing any new version', 3, Kind.SECONDARY),
     Check('gitlab.integration_suite', "Suite d'intégration dans le rapport de tests", 'Artefacts', 'Security integration tests for important components', 3, Kind.PROOF),
     Check('repo.security_integration_tests', "Tests d'intégration de sécurité", 'Dépôt', 'Security integration tests for important components', 3, Kind.HINT),
     Check('gitlab.sast', 'Analyse statique dans la CI', 'CI fusionnée', 'Static analysis for important server side components', 3, Kind.PROOF),

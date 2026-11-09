@@ -56,7 +56,7 @@ def client(seeded, database_url, monkeypatch):
 
     monkeypatch.setenv("PERISKOPE_DATABASE_URL", database_url)
     monkeypatch.setenv("PERISKOPE_VALKEY_URL", os.environ.get("PERISKOPE_TEST_VALKEY_URL", "redis://localhost:56379"))
-    for k in ("OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_CLIENT_ID"):
+    for k in ("OIDC_ISSUER", "OIDC_CLIENT_ID"):
         monkeypatch.setenv(f"PERISKOPE_{k}", "https://kc.test/realms/x" if k == "OIDC_ISSUER" else "periskope")
     who = {"v": None}
     api.app.dependency_overrides[api.current] = lambda: who["v"]

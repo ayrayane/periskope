@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Activity, ActivityStatus, api, ApiError, DEMO, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run, Summary } from "../api";
+import { Activity, ActivityStatus, api, ApiError, Branch, BranchScore, DEMO, Check, CheckResult, Project as P, projectUrl, RoadmapItem, Run, Summary } from "../api";
 import BranchPicker from "../components/BranchPicker";
 import ScoreChart from "../components/ScoreChart";
 import FixGuide from "../components/FixGuide";
@@ -11,7 +11,7 @@ import GroupNav, { ScopeCrumbs, useScopeData } from "../components/GroupNav";
 import { Help } from "../components/Help";
 import Radar from "../components/Radar";
 import { compareBy, SortTh, StatusFilter, useSort } from "../components/TableTools";
-import { ActivityBadge, CheckBadge, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
+import { ActivityBadge, CheckBadge, PracticeCounts, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
 import { NOT_MEASURED, total, VulnBar } from "../components/Vulns";
 import { ScopeEditor } from "./Scope";
 import { dimension as dimLabel, practice } from "../labels";
@@ -20,11 +20,13 @@ const TABS = [
   ["activites", "Activités"],
   ["preuves", "Preuves"],
   ["a-faire", "À faire"],
+  ["vulnerabilites", "Vulnérabilités"],
+  ["branches", "Branches"],
   ["historique", "Historique"],
   ["cadrage", "Cadrage"],
 ] as const;
 type Tab = (typeof TABS)[number][0];
-const SOURCE: Record<string, string> = { "API projet": "GitLab", "Dépôt": "Dépôt", SonarQube: "SonarQube", Scorecard: "Scorecard" };
+const SOURCE: Record<string, string> = { "API projet": "GitLab", "Dépôt": "Dépôt", SonarQube: "SonarQube" };
 const ACTIVE = ["queued", "running"];
 // Most urgent first when sorting by state.
 const SEVERITY: ActivityStatus[] = ["not_implemented", "partial", "unknown", "implemented", "not_applicable", "out_of_scope"];
@@ -71,7 +73,7 @@ export default function Project() {
       // A branch analysis is checked on its own page, next to the comparison with the reference.
       if (b) navigate(`/r/${r.id}`);
     },
-    onSettled: () => client.invalidateQueries({ queryKey: ["project", url] }),
+    onSettled: () => { client.invalidateQueries({ queryKey: ["project", url] }); client.invalidateQueries({ queryKey: ["branch-scores", url] }); },
   });
 
   if (project.isError) {
@@ -83,11 +85,9 @@ export default function Project() {
   const gitlab = scope.instances.find((i) => i.slug === p.instance);
   // The score in words: what is counted up to the target level, what is in place, what could not be checked.
   const counted = (activities.data?.items ?? []).filter((a) => a.level <= p.target_level && !["not_applicable", "out_of_scope"].includes(p.statuses?.[a.name]?.status ?? "unknown"));
-  const counts = p.last_run && counted.length ? {
-    counted: counted.length,
-    done: counted.filter((a) => p.statuses?.[a.name]?.status === "implemented").length,
-    unknown: counted.filter((a) => (p.statuses?.[a.name]?.status ?? "unknown") === "unknown").length,
-  } : null;
+  const n = (st: ActivityStatus) => counted.filter((a) => (p.statuses?.[a.name]?.status ?? "unknown") === st).length;
+  const counts = p.last_run && counted.length
+    ? { counted: counted.length, done: n("implemented"), partial: n("partial"), missing: n("not_implemented"), unknown: n("unknown") } : null;
   const tabs = TABS.filter(([key]) => key !== "cadrage" || p.can_launch);
   const asked = params.get("vue") as Tab | null;
   const tab: Tab = tabs.some(([k]) => k === asked) ? asked! : "activites";
@@ -114,8 +114,7 @@ export default function Project() {
         </div>
         <div className="head-score">
           <Score score={p.score} coverage={p.coverage} size="lg" />
-          {counts && <span className="score-sentence">{counts.done} pratique{counts.done > 1 ? "s" : ""} en place sur {counts.counted}
-            {counts.unknown > 0 && <>, {counts.unknown} non vérifiée{counts.unknown > 1 ? "s" : ""}</>}</span>}
+          {counts && <PracticeCounts p={counts} onMissing={() => selectTab("a-faire")} />}
           <span className="muted small">Comment lire ces chiffres <Help term="chiffres" label="le score et la couverture" /></span>
         </div>
       </header>
@@ -135,13 +134,6 @@ export default function Project() {
         </span>
         {launch.error && <span className="error" role="alert">{(launch.error as Error).message}</span>}
       </div>
-      {p.last_run && (
-        <section className="card vulns vulns-project" aria-labelledby="vulns-title">
-          <h2 id="vulns-title">Vulnérabilités ouvertes {p.vulns && <span className="muted">{total(p.vulns)}</span>}</h2>
-          {p.vulns ? <VulnBar v={p.vulns} /> : <p className="muted">{NOT_MEASURED}</p>}
-          {p.vulns && gitlab && !DEMO && <a href={`${gitlab.url.replace(/\/$/, "")}/${p.path}/-/security/vulnerability_report`} target="_blank" rel="noreferrer">Voir le détail dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
-        </section>
-      )}
       {p.last_error && <p className="banner">Dernière analyse impossible : {p.last_error}. Le score affiché reste celui de la dernière analyse réussie.</p>}
 
       {p.last_run && <NextSteps project={p} url={url} activities={activities.data?.items ?? []} checks={checks.data ?? []} onAll={() => selectTab("a-faire")} />}
@@ -164,6 +156,8 @@ export default function Project() {
       <section role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
         {tab === "cadrage" ? (
           <ScopeEditor where={{ instance: p.instance, project: p.path }} canEdit={p.can_launch} />
+        ) : tab === "branches" ? (
+          <Branches url={url} project={p} busy={launch.isPending} onLaunch={(b) => launch.mutate(b === p.default_branch ? null : b)} />
         ) : !p.last_run && tab !== "historique" ? (
           <p className="empty">Ce projet n'a pas encore été analysé.</p>
         ) : tab === "activites" ? (
@@ -176,6 +170,13 @@ export default function Project() {
           <p className="panel-intro">Chaque contrôle automatique <Help term="preuve" label="une preuve" />, ce qu'il a constaté et, s'il échoue, comment le corriger.</p>
           <Checks results={results} checks={checks.data ?? []} url={url} instance={p.instance} />
           </>
+        ) : tab === "vulnerabilites" ? (
+          <section className="card vulns vulns-project" aria-labelledby="vulns-title">
+            <h2 id="vulns-title">Vulnérabilités ouvertes {p.vulns && <span className="muted">{total(p.vulns)}</span>}</h2>
+            {p.vulns ? <VulnBar v={p.vulns} /> : <p className="muted">{NOT_MEASURED}</p>}
+            {results["gitlab.sbom_artifact"]?.status === "fail" && <p className="banner">Aucun SBOM CycloneDX publié par le pipeline : GitLab ne peut pas rapprocher les dépendances des CVE, un zéro ici ne prouve rien.</p>}
+            {p.vulns && gitlab && !DEMO && <a href={`${gitlab.url.replace(/\/$/, "")}/${p.path}/-/security/vulnerability_report`} target="_blank" rel="noreferrer">Voir le détail dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
+          </section>
         ) : tab === "a-faire" ? (
           <>
           <p className="panel-intro">Le plan pour atteindre le niveau cible <Help term="cible" label="le niveau cible" />, dans l'ordre : niveaux bas et prérequis d'abord.</p>
@@ -348,6 +349,55 @@ function Todo({ url, targetLevel, checks }: { url: string; targetLevel: number; 
         </li>
       ))}
     </ol>
+  );
+}
+
+/** Every branch of the repository with its latest analysis: compare a branch with the reference and analyse it again in one click. */
+function Branches({ url, project, busy, onLaunch }: { url: string; project: P; busy: boolean; onLaunch: (branch: string) => void }) {
+  const gitlab = useQuery({ queryKey: ["branches", url], queryFn: () => api<Branch[]>(`${url}/branches`), staleTime: 60_000 });
+  const scores = useQuery({ queryKey: ["branch-scores", url], queryFn: () => api<BranchScore[]>(`${url}/branch-scores`) });
+  const [filter, setFilter] = useState("");
+  if (scores.isError) return <p className="error" role="alert">{(scores.error as Error).message}</p>;
+  if (!scores.data || gitlab.isLoading) return <Skeleton lines={4} label="Chargement des branches…" />;
+  const byName = new Map(scores.data.map((b) => [b.branch, b]));
+  const live = gitlab.data ?? [];
+  // GitLab's branches first (reference on top), then analysed branches since deleted in GitLab.
+  const names = [...live.map((b) => b.name), ...scores.data.map((b) => b.branch).filter((n) => !live.some((b) => b.name === n))];
+  const ref = byName.get(project.default_branch ?? "")?.score ?? project.score;
+  const shown = names.filter((n) => n.toLowerCase().includes(filter.toLowerCase()));
+  return (
+    <>
+      <p className="panel-intro">Les branches du dépôt et la dernière analyse de chacune ; l'écart se lit par rapport à la branche de référence <code>{project.default_branch}</code>. Les analyses de branche sont gardées le temps réglé par l'administrateur.</p>
+      {gitlab.isError && <p className="banner">Liste des branches GitLab indisponible pour le moment : seules les branches déjà analysées sont affichées.</p>}
+      {names.length > 8 && (
+        <label className="search branch-filter"><span className="sr-only">Filtrer les branches</span>
+          <input type="search" placeholder="Filtrer les branches" value={filter} onChange={(e) => setFilter(e.target.value)} /></label>
+      )}
+      <div className="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Branche</th><th scope="col">Dernier commit</th><th scope="col">Score</th><th scope="col">Écart</th><th scope="col">Dernière analyse</th>{project.can_launch && <th scope="col"><span className="sr-only">Action</span></th>}</tr></thead>
+          <tbody>
+            {shown.map((name) => {
+              const g = live.find((b) => b.name === name), s = byName.get(name);
+              const active = s && ACTIVE.includes(s.last_status);
+              const delta = s?.score != null && ref != null && name !== project.default_branch ? Math.round(s.score - ref) : null;
+              return (
+                <tr key={name}>
+                  <td><code>{name}</code>{g?.default && <span className="badge tone-not_applicable branch-tag">référence</span>}
+                    {g?.protected && !g.default && <span className="badge tone-not_applicable branch-tag">protégée</span>}
+                    {!g && gitlab.data && <span className="muted small"> · supprimée dans GitLab</span>}</td>
+                  <td>{g ? when(g.committed_at) : "—"}</td>
+                  <td>{s?.score != null ? <Link to={`/r/${s.run_id}`} aria-label={`Analyse de ${name}`}><Score score={s.score} coverage={s.coverage} /></Link> : <span className="muted small">jamais analysée</span>}</td>
+                  <td>{delta == null ? "" : <span className={delta < 0 ? "t-fail" : delta > 0 ? "t-pass" : "muted"}>{delta > 0 ? "+" : ""}{delta}</span>}</td>
+                  <td>{s ? <>{s.last_status === "succeeded" ? when(s.finished_at) : <span className={`badge ${active ? "tone-running" : "tone-fail"}`}>{RUN_LABEL[s.last_status]}</span>}</> : "—"}</td>
+                  {project.can_launch && <td>{g && <button type="button" className="secondary" disabled={busy || active} onClick={() => onLaunch(name)}>{active ? "En cours…" : "Analyser"}</button>}</td>}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 

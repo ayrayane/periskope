@@ -43,13 +43,18 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   return <UserContext.Provider value={user}>{children}</UserContext.Provider>;
 }
 
+/** Where to go back after sign-in: a page of this site only. "//host" and "/\\host" are other sites to a browser. */
+export function safeReturn(state: unknown): string {
+  return typeof state === "string" && /^\/(?![/\\])[^\\]*$/.test(state) ? state : "/";
+}
+
 export function Callback() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     userManager()
       .then((m) => m.signinRedirectCallback())
-      .then((u) => navigate(typeof u.state === "string" && u.state.startsWith("/") ? u.state : "/", { replace: true }))
+      .then((u) => navigate(safeReturn(u.state), { replace: true }))
       .catch((e) => setError(String(e.message ?? e)));
   }, [navigate]);
   return error ? <p className="page-status error" role="alert">Connexion impossible : {error}</p> : <p className="page-status" role="status">Connexion…</p>;

@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { projectUrl } from "./api";
-import { ActivityBadge, CheckBadge, Score } from "./components/status";
+import { safeReturn } from "./auth";
+import { ActivityBadge, CheckBadge, PracticeCounts, Score } from "./components/status";
 
 test("unknown is never displayed as a failure", () => {
   render(<><CheckBadge status="unknown" /><ActivityBadge status="unknown" /></>);
@@ -28,4 +29,17 @@ test("score chart needs two analyses and labels its range", async () => {
   const { container } = render(<MemoryRouter><ScoreChart runs={[run(1, 40, 0), run(2, 55, 1), run(3, 61, 2)]} /></MemoryRouter>);
   expect(container.querySelector("svg")?.getAttribute("aria-label")).toBe("Score de 40 à 61 sur 3 analyses");
   expect(container.querySelectorAll("circle").length).toBe(3);
+});
+
+test("a score shows how many practices are absent, of how many expected", () => {
+  render(<PracticeCounts p={{ done: 1, partial: 2, missing: 19, unknown: 1, counted: 23 }} />);
+  expect(screen.getByText(/pratiques absentes sur 23 attendues/)).toBeTruthy();
+  expect(screen.getByText(/1 en place/)).toBeTruthy();
+  expect(screen.getByText(/2 partielles/)).toBeTruthy();
+  expect(screen.getByText(/1 non vérifiée$/)).toBeTruthy();
+});
+
+test("sign-in only returns to a page of this site", () => {
+  expect(safeReturn("/p/gl/team/app?vue=preuves")).toBe("/p/gl/team/app?vue=preuves");
+  for (const evil of ["//evil.example", "/\\evil.example", "/x\\..\\evil", "https://evil.example", "evil", null, 42]) expect(safeReturn(evil)).toBe("/");
 });

@@ -19,12 +19,14 @@ from periskope_db import connect
 from periskope_db import settings as hot
 from periskope_db.bootstrap import bootstrap
 
+from periskope_scheduler import feeds
+
 log = structlog.get_logger()
 TZ = ZoneInfo(env("TIMEZONE", "Europe/Paris"))
 # Absorbs a burst of pushes: the project is analysed once, 10 minutes after the first event.
 QUIET = timedelta(minutes=10)
 LOCK_KEY, LOCK_TTL_S = "scheduler:lock", 60
-TASKS = {"sync_projects": "sync_at", "catch_up": "catch_up_at", "rollup_history": "rollup_at"}
+TASKS = {"vuln_feeds": "feeds_at", "sync_projects": "sync_at", "catch_up": "catch_up_at", "rollup_history": "rollup_at"}
 SYSTEM_EVENTS = {"project_create", "project_rename", "project_transfer", "project_destroy"}
 ALERTS_EVERY_S = 300
 
@@ -119,6 +121,10 @@ async def cron_loop() -> None:
         except Exception:
             log.exception("cron_error")
         await asyncio.sleep(20)
+
+
+async def vuln_feeds() -> None:
+    await feeds.refresh(state["db"])
 
 
 async def sync_projects() -> None:

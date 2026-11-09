@@ -64,9 +64,16 @@ def router(state: dict[str, Any], current, audit) -> APIRouter:
         sync_at: str | None = None
         catch_up_at: str | None = None
         rollup_at: str | None = None
+        feeds_at: str | None = None
+        epss_high_pct: int | None = Field(None, ge=1, le=100)
         on_demand_per_hour: int | None = Field(None, ge=1, le=1000)
         evidence_days: int | None = Field(None, ge=1, le=90)
         branch_run_days: int | None = Field(None, ge=1, le=365)
+        alert_drop: int | None = Field(None, ge=1, le=100)
+        sla_critical_hours: int | None = Field(None, ge=1, le=720)
+        sla_high_days: int | None = Field(None, ge=1, le=365)
+        sla_medium_days: int | None = Field(None, ge=1, le=365)
+        sla_low_days: int | None = Field(None, ge=1, le=730)
 
     @r.put("/settings")
     async def put_settings(body: SettingsPatch, me: Admin) -> dict:

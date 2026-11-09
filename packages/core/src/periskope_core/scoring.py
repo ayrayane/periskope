@@ -25,9 +25,6 @@ def activity_status(checks: list[Check], results: Mapping[str, CheckStatus]) -> 
         return [c for c in checks if c.kind in kinds and results.get(c.id) != CheckStatus.NOT_APPLICABLE]
 
     decisive = pick({Kind.PROOF, Kind.HINT})
-    # Secondary checks only stand in when the main ones concluded nothing.
-    if all(results.get(c.id, CheckStatus.UNKNOWN) == CheckStatus.UNKNOWN for c in decisive):
-        decisive = pick({Kind.SECONDARY}) or decisive
     if not decisive:
         return ActivityStatus.NOT_APPLICABLE, False
     # Unknown is never a failure: the activity is decided on the checks that concluded.

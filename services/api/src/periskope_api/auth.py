@@ -23,20 +23,22 @@ MEMBERSHIP_WAIT_S = 2.0
 @dataclass
 class Settings:
     issuer: str
-    audience: str
     client_id: str
 
     @classmethod
     def from_env(cls) -> Settings:
-        return cls(env("OIDC_ISSUER"), env("OIDC_AUDIENCE"), env("OIDC_CLIENT_ID"))
+        return cls(env("OIDC_ISSUER"), env("OIDC_CLIENT_ID"))
 
 
 class Verifier:
     role_map: ClassVar[dict[str, str]] = {}  # replaced per instance from PERISKOPE_ROLE_MAP
+    admins: ClassVar[frozenset[str]] = frozenset()  # replaced per instance from PERISKOPE_ADMINS
 
     def __init__(self, settings: Settings, ca_file: str | None = None):
         self.settings = settings
         self.role_map = json.loads(env("ROLE_MAP", "{}"))
+        # Keycloak logins listed in the deployment repository (admins.yaml): admins whatever their roles.
+        self.admins = frozenset(u.lower() for u in json.loads(env("ADMINS", "[]")))
         # JWKS cached 5 minutes; a new signing key triggers a refetch.
         ctx = ssl.create_default_context(cafile=ca_file) if ca_file else None
         self.jwks = jwt.PyJWKClient(f"{settings.issuer}/protocol/openid-connect/certs", cache_jwk_set=True, lifespan=300, ssl_context=ctx)
@@ -47,8 +49,10 @@ class Verifier:
         token = authorization[7:]
         try:
             key = await asyncio.to_thread(self.jwks.get_signing_key_from_jwt, token)
-            claims = jwt.decode(token, key.key, algorithms=["RS256", "ES256", "PS256"], audience=self.settings.audience,
-                                issuer=self.settings.issuer, options={"require": ["exp", "iss", "aud", "sub"]})
+            # No audience check: Keycloak only puts the client in `aud` with an extra mapper. azp below says the token
+            # was issued to Periskope's own client, which is what matters.
+            claims = jwt.decode(token, key.key, algorithms=["RS256", "ES256", "PS256"], issuer=self.settings.issuer,
+                                options={"require": ["exp", "iss", "sub"], "verify_aud": False})
         except jwt.PyJWTError as e:
             raise HTTPException(401, f"jeton refusé : {e}") from None
         if claims.get("azp") != self.settings.client_id:
@@ -57,6 +61,8 @@ class Verifier:
 
     def role(self, claims: dict) -> str:
         """Client and realm roles, translated by PERISKOPE_ROLE_MAP (e.g. {"manager": "auditor", "user": "viewer"}), highest wins."""
+        if (claims.get("preferred_username") or "").lower() in self.admins:
+            return "admin"
         roles = set((claims.get("resource_access", {}).get(self.settings.client_id) or {}).get("roles", []))
         # A realm is often shared: its plain "admin" belongs to another application. Only periskope-* or mapped realm roles count.
         roles |= {r for r in claims.get("realm_access", {}).get("roles", []) if r.startswith("periskope-") or r in self.role_map}

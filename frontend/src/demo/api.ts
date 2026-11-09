@@ -10,7 +10,6 @@ type ActivityStatus = "implemented" | "partial" | "not_implemented" | "unknown" 
 const CHECKS = catalog.checks as Check[];
 const ACTIVITIES = catalog.activities;
 const BY_NAME = Object.fromEntries(ACTIVITIES.map((a) => [a.name, a]));
-const SCORECARD_OFF = new Set(CHECKS.filter((c) => c.source === "Scorecard").map((c) => c.id));
 const TARGET = 3;
 
 function rng(seed: number) {
@@ -41,8 +40,7 @@ function drawResults(quality: number, sonar: boolean, r: () => number) {
   const results: Record<string, { status: Status; message: string; action?: string }> = {};
   for (const c of CHECKS) {
     let s: Status;
-    if (SCORECARD_OFF.has(c.id)) s = "unknown";
-    else if (c.source === "SonarQube" && !sonar) s = "unknown";
+    if (c.source === "SonarQube" && !sonar) s = "unknown";
     else if (/docker|image|pinning/i.test(c.id) && r() < 0.2) s = "not_applicable";
     else if (r() < 0.06) s = "unknown";
     else s = r() < quality * (1.25 - c.level * 0.12) ? "pass" : "fail";
@@ -55,8 +53,8 @@ function drawResults(quality: number, sonar: boolean, r: () => number) {
 function score(results: Record<string, { status: Status }>) {
   const statuses: Record<string, { status: ActivityStatus; to_confirm: boolean }> = {};
   for (const a of ACTIVITIES) {
-    const main = CHECKS.filter((c) => c.activity === a.name && !SCORECARD_OFF.has(c.id) && c.kind !== "secondary" && results[c.id]?.status !== "not_applicable");
-    if (!main.length) { statuses[a.name] = { status: CHECKS.some((c) => c.activity === a.name && !SCORECARD_OFF.has(c.id)) ? "not_applicable" : "out_of_scope", to_confirm: false }; continue; }
+    const main = CHECKS.filter((c) => c.activity === a.name && results[c.id]?.status !== "not_applicable");
+    if (!main.length) { statuses[a.name] = { status: CHECKS.some((c) => c.activity === a.name) ? "not_applicable" : "out_of_scope", to_confirm: false }; continue; }
     const known = main.filter((c) => results[c.id].status !== "unknown");
     const passed = known.filter((c) => results[c.id].status === "pass");
     const status: ActivityStatus = !known.length ? "unknown" : passed.length === known.length ? "implemented" : passed.length ? "partial" : "not_implemented";
@@ -106,7 +104,7 @@ const CATALOGUE: [key: string, sev: "critical" | "high" | "medium" | "low", titl
 
 function drawFindings(v: ReturnType<typeof drawVulns> | null, r: () => number) {
   return v && CATALOGUE.filter(([, sev, , , odds]) => v[sev] > 0 && r() < odds)
-    .map(([key, severity, title, type]) => ({ key, cve: key.startsWith("CVE-"), severity, title, type }));
+    .map(([key, severity, title, type]) => ({ key, cve: key.startsWith("CVE-"), severity, title, type, detected_at: iso(NOW - Math.floor(r() * 120 * DAY)) }));
 }
 
 type Demo = ReturnType<typeof makeProject>;
@@ -148,7 +146,25 @@ const PROJECTS: Demo[] = (() => {
   return out;
 })();
 
-const row = ({ results, history, statuses, findings, ...p }: Demo) => p;
+const practices = (x: Demo) => {
+  if (!x.statuses) return null;
+  const counted = ACTIVITIES.filter((a) => a.level <= TARGET && !["not_applicable", "out_of_scope"].includes(x.statuses![a.name].status));
+  const n = (st: string) => counted.filter((a) => x.statuses![a.name].status === st).length;
+  return { done: n("implemented"), partial: n("partial"), missing: n("not_implemented"), unknown: n("unknown"), counted: counted.length };
+};
+const vulnCoverage = (x: Demo) => {
+  const sbom = x.results?.["gitlab.sbom_artifact"]?.status;
+  return x.last_run_id == null ? "unmeasured" : x.vulns && SEV.some((k) => x.vulns![k] > 0) ? "reporting"
+    : sbom === "fail" ? "blind" : sbom === "pass" && x.vulns ? "clean" : "unmeasured";
+};
+const foundation = (x: Demo) => !!x.statuses && ACTIVITIES.every((a) => a.level !== 1 || !["not_implemented", "partial", "unknown"].includes(x.statuses![a.name]?.status));
+// The demo's score 30 days ago: its oldest kept analysis.
+const before = (x: Demo) => x.history[0]?.score ?? null;
+const trendOf = (x: Demo) => { const b = before(x); return b == null || x.score == null ? null : x.score > b + 1 ? "up" : x.score < b - 1 ? "down" : "flat"; };
+const row = (x: Demo) => {
+  const { results, history, statuses, findings, ...p } = x;
+  return { ...p, practices: practices(x), vuln_coverage: vulnCoverage(x) };
+};
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const inScope = (q: URLSearchParams) => PROJECTS.filter((p) => (!q.get("instance") || p.instance === q.get("instance"))
   && (!q.get("namespace") || p.namespace_path === q.get("namespace") || p.namespace_path.startsWith(q.get("namespace") + "/")));
@@ -161,6 +177,20 @@ function roadmap(p: Demo) {
 }
 
 const SEV = ["critical", "high", "medium", "low", "info", "unknown"] as const;
+const SLA: Partial<Record<(typeof SEV)[number], number>> = { critical: 24, high: 7 * 24, medium: 30 * 24, low: 90 * 24 };
+// Demo exploitation data: Log4Shell, Text4Shell and xz-utils are in KEV; EPSS made up per CVE.
+const KEV = new Set(["CVE-2021-44228", "CVE-2022-42889", "CVE-2024-3094", "CVE-2023-44487"]);
+const epssOf = (key: string) => (KEV.has(key) ? 0.94 : key.startsWith("CVE-") ? [0.94, 0.002, 0.31, 0.05, 0.0004, 0.12][[...key].reduce((a, c) => a + c.charCodeAt(0), 0) % 6] : null);
+const priorityOf = (f: { key: string; severity: string }) => {
+  const e = epssOf(f.key);
+  if (KEV.has(f.key)) return "critical";
+  if (e != null && e >= 0.1) return f.severity === "medium" ? "high" : f.severity === "low" ? "medium" : "critical";
+  return e != null && f.severity === "critical" ? "high" : f.severity;
+};
+const late = (f: { key: string; severity: string; detected_at: string }) => {
+  const h = SLA[priorityOf(f) as (typeof SEV)[number]];
+  return !!h && Date.parse(f.detected_at) + h * 3_600_000 < Date.now();
+};
 function vulnSummary(items: Demo[]) {
   const measured = items.filter((x) => x.vulns);
   if (!measured.length) return null;
@@ -168,7 +198,11 @@ function vulnSummary(items: Demo[]) {
   const exposed = measured.filter((x) => x.vulns!.critical + x.vulns!.high > 0)
     .sort((a, b) => b.vulns!.critical - a.vulns!.critical || b.vulns!.high - a.vulns!.high || a.path.localeCompare(b.path)).slice(0, 5)
     .map(({ instance, path, vulns }) => ({ instance, path, vulns: vulns! }));
-  return { ...sums, total: SEV.reduce((s, k) => s + sums[k], 0), projects: measured.length, exposed };
+  const found = measured.flatMap((x) => x.findings ?? []);
+  const overdue = Object.fromEntries(Object.keys(SLA).map((k) => [k, found.filter((f) => f.severity === k && late(f)).length]));
+  const byPriority = Object.fromEntries(Object.keys(SLA).map((k) => [k, found.filter((f) => priorityOf(f) === k).length]));
+  return { ...sums, total: SEV.reduce((s, k) => s + sums[k], 0), projects: measured.length, exposed, sla_hours: SLA, overdue, dated: found.length,
+    by_priority: byPriority, kev: found.filter((f) => KEV.has(f.key)).length };
 }
 
 class DemoError extends Error {
@@ -212,7 +246,7 @@ function route(path: string, method: string): unknown {
   if (method !== "GET") throw new DemoError(403, "Démo en lecture seule : aucune analyse ni modification n'est possible ici.");
   if (p === "/me") return { sub: "demo", username: "demo", admin: false, reads_all: true, namespaces: [], maintains: [] };
   if (p === "/instances") return INSTANCES.map(({ sonar, ...i }) => i);
-  if (p === "/checks") return CHECKS.map((c) => ({ ...c, scope: SCORECARD_OFF.has(c.id) ? { decision: "excluded", reason: "pas d'accès Internet pour Scorecard" } : null }));
+  if (p === "/checks") return CHECKS.map((c) => ({ ...c, scope: null }));
   if (p === "/activities") return { version: "5.0.2", items: ACTIVITIES };
   if (p === "/groups") {
     const g: Record<string, { instance: string; path: string; projects: number; analysed: number; score_sum: number }> = {};
@@ -228,6 +262,10 @@ function route(path: string, method: string): unknown {
     if (q.get("below_target")) items = items.filter((x) => x.score != null && x.score < 100);
     if (q.get("failed")) items = items.filter((x) => x.last_error);
     if (q.get("never")) items = items.filter((x) => x.score == null);
+    if (q.get("foundation_missing")) items = items.filter((x) => x.statuses && !foundation(x));
+    if (q.get("trend")) items = items.filter((x) => trendOf(x) === q.get("trend"));
+    if (q.get("unmeasured")) items = items.filter((x) => x.score == null || x.last_error);
+    if (q.get("vuln_coverage")) items = items.filter((x) => vulnCoverage(x) === q.get("vuln_coverage"));
     const sort = q.get("sort");
     items = [...items].sort(sort === "score" ? (a, b) => (b.score ?? -1) - (a.score ?? -1)
       : sort === "last_run" ? (a, b) => (b.last_success_at ?? "").localeCompare(a.last_success_at ?? "") : (a, b) => a.path.localeCompare(b.path));
@@ -247,22 +285,32 @@ function route(path: string, method: string): unknown {
       dimensions: Object.fromEntries(dims.map((d) => [d, avg(sc.map((x) => x.by_dimension![d]).filter((v): v is number => v != null)) ?? 0])),
       gaps, lowest: [...sc].sort((a, b) => a.score! - b.score!).slice(0, 3).map(({ instance, path, score, coverage, last_success_at }) => ({ instance, path, score, coverage, last_success_at })),
       vulns: vulnSummary(items),
+      feeds: { kev: { configured: true, fetched_at: iso(NOW), rows: 1484, published: null, error: null },
+        epss: { configured: true, fetched_at: iso(NOW), rows: 299112, published: iso(NOW - DAY), error: null } },
+      foundation_ok: items.filter(foundation).length, unmeasured: items.filter((x) => x.score == null || x.last_error).length,
+      improving: items.filter((x) => trendOf(x) === "up").length, declining: items.filter((x) => trendOf(x) === "down").length,
+      compared: items.filter((x) => trendOf(x) != null).length,
+      practices: sc.length ? { projects: sc.length, ...Object.fromEntries((["done", "partial", "missing", "unknown", "counted"] as const).map((k) => [k, avg(sc.map((x) => practices(x)![k]))])) } : null,
+      vuln_coverage: Object.fromEntries(["reporting", "clean", "blind", "unmeasured"].map((b) => [b, items.filter((x) => vulnCoverage(x) === b).length])),
     };
   }
   if (p === "/vulnerabilities") {
     const measured = inScope(q).filter((x) => x.findings), needle = q.get("q")?.toLowerCase();
-    const groups = new Map<string, { key: string; cve: boolean; title: string; severity: string; projects: number }>();
+    const groups = new Map<string, { key: string; cve: boolean; title: string; severity: string; projects: number; detected_at: string; overdue: number }>();
     for (const f of measured.flatMap((x) => x.findings!)) {
       if (needle && !f.key.toLowerCase().includes(needle) && !f.title.toLowerCase().includes(needle)) continue;
-      const g = groups.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, projects: 0 };
+      const g = groups.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, projects: 0, detected_at: f.detected_at, overdue: 0 };
       g.projects++;
+      if (late(f)) g.overdue++;
+      Object.assign(g, { priority: priorityOf(f), kev: KEV.has(f.key), epss: epssOf(f.key), percentile: null });
+      if (f.detected_at < g.detected_at) g.detected_at = f.detected_at;
       groups.set(f.key, g);
     }
     const rank = (s: string) => SEV.indexOf(s as (typeof SEV)[number]);
-    return { measured: measured.length, items: [...groups.values()].sort((a, b) => rank(a.severity) - rank(b.severity) || b.projects - a.projects || a.key.localeCompare(b.key)) };
+    return { measured: measured.length, sla_hours: SLA, items: [...groups.values()].sort((a, b) => rank(priorityOf(a)) - rank(priorityOf(b)) || rank(a.severity) - rank(b.severity) || b.projects - a.projects || a.key.localeCompare(b.key)) };
   }
   if (p === "/vulnerabilities/projects") {
-    return inScope(q).flatMap((x) => (x.findings ?? []).filter((f) => f.key === q.get("key")).map((f) => ({ instance: x.instance, path: x.path, score: x.score, coverage: x.coverage, severity: f.severity, type: f.type })))
+    return inScope(q).flatMap((x) => (x.findings ?? []).filter((f) => f.key === q.get("key")).map((f) => ({ instance: x.instance, path: x.path, score: x.score, coverage: x.coverage, severity: f.severity, type: f.type, detected_at: f.detected_at, overdue: late(f), priority: priorityOf(f), kev: KEV.has(f.key), epss: epssOf(f.key) })))
       .sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity) || a.instance.localeCompare(b.instance) || a.path.localeCompare(b.path));
   }
   if (p === "/projects/trend") {
@@ -296,20 +344,27 @@ function route(path: string, method: string): unknown {
     }
     return { ...run, instance: proj.instance, path: proj.path, default_branch: "main", results: proj.results };
   }
-  const projMatch = /^\/projects\/([^/]+)\/(.+?)(\/branches|\/runs|\/roadmap)?$/.exec(p);
+  const projMatch = /^\/projects\/([^/]+)\/(.+?)(\/branches|\/branch-scores|\/runs|\/roadmap)?$/.exec(p);
   if (projMatch) {
     const proj = PROJECTS.find((x) => x.instance === projMatch[1] && x.path === projMatch[2]);
     if (!proj) throw new DemoError(404, "Ce projet n'existe pas dans la démo.");
-    if (projMatch[3] === "/branches") return [{ name: "main", default: true, protected: true, committed_at: proj.last_success_at }, { name: "feat/securite", default: false, protected: false, committed_at: proj.last_success_at }];
+    if (projMatch[3] === "/branches") return ["main", "develop", "feat/securite", "fix/dependances"].map((name, i) => ({ name, default: i === 0, protected: i < 2, committed_at: iso(NOW - i * 2 * DAY) }));
+    if (projMatch[3] === "/branch-scores") {
+      const last = proj.history.at(-1);
+      if (!last) return [];
+      return [["main", 0], ["develop", 6], ["feat/securite", 14], ["release/2.3", -9]].map(([branch, delta], i) => {
+        const score = Math.max(0, Math.min(100, (last.score ?? 0) + (delta as number)));
+        return { branch, last_id: last.id + i, last_status: "succeeded", last_at: iso(NOW - i * DAY), run_id: last.id, score, coverage: last.coverage, finished_at: iso(NOW - i * DAY), commit_sha: last.commit_sha };
+      });
+    }
     if (projMatch[3] === "/runs") return { items: [...proj.history].reverse(), next_cursor: null };
     if (projMatch[3] === "/roadmap") return roadmap(proj);
     const last = proj.history.at(-1);
     return { ...row(proj), statuses: proj.statuses, can_launch: false, active_run: null,
       last_run: last && { id: last.id, commit_sha: last.commit_sha, finished_at: last.finished_at, results: proj.results, reused_from: null } };
   }
-  if (p === "/scope") return CHECKS.map((c) => ({ target: "check", target_id: c.id, decision: SCORECARD_OFF.has(c.id) ? "excluded" : "retained",
-    reason: SCORECARD_OFF.has(c.id) ? "pas d'accès Internet pour Scorecard" : null, level: SCORECARD_OFF.has(c.id) ? "organisation" : "défaut",
-    inherited: SCORECARD_OFF.has(c.id), author: SCORECARD_OFF.has(c.id) ? "admin" : null, updated_at: null }));
+  if (p === "/scope") return CHECKS.map((c) => ({ target: "check", target_id: c.id, decision: "retained",
+    reason: null, level: "défaut", inherited: false, author: null, updated_at: null }));
   throw new DemoError(404, "Indisponible dans la démo.");
 }
 

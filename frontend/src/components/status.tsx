@@ -1,5 +1,5 @@
 // Shared visual vocabulary: score with its coverage, and statuses that never show "unknown" as a failure.
-import type { ActivityStatus, CheckStatus } from "../api";
+import type { ActivityStatus, CheckStatus, Practices } from "../api";
 import type { CSSProperties } from "react";
 
 type IconName = "check" | "cross" | "question" | "dash" | "half";
@@ -51,6 +51,42 @@ export function ActivityBadge({ status, toConfirm }: { status: ActivityStatus; t
     <span className={`badge tone-${s.tone}`}>
       <Icon name={s.icon} /> {s.label}
       {toConfirm && <span className="to-confirm"> · à confirmer</span>}
+    </span>
+  );
+}
+
+const PRACTICE: [keyof Practices, string, IconName, string][] = [
+  ["missing", "absente", "cross", "fail"],
+  ["partial", "partielle", "half", "amber"],
+  ["done", "en place", "check", "pass"],
+  ["unknown", "non vérifiée", "question", "unknown"],
+];
+const plural = (n: number, word: string) => (n > 1 && word !== "en place" ? `${word}s` : word);
+
+/** The practices behind a score, absent first since they are the work left: 17/100 reads as "19 absent out of 23". */
+export function PracticeCounts({ p, onMissing }: { p: Practices; onMissing?: () => void }) {
+  const missing = Math.round(p.missing);
+  const headline = <><strong>{missing}</strong> {plural(missing, "pratique")} {plural(missing, "absente")} sur {Math.round(p.counted)} attendues</>;
+  return (
+    <div className="practices">
+      {onMissing && missing > 0 ? <button type="button" className="link practices-head" onClick={onMissing}>{headline}</button> : <span className="practices-head">{headline}</span>}
+      <ul className="practice-chips" aria-label="Pratiques par état">
+        {PRACTICE.map(([k, word, icon, tone]) => {
+          const n = Math.round(p[k]);
+          return <li key={k} className={`badge tone-${tone}`}><Icon name={icon} /> {n} {plural(n, word)}</li>;
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** One table cell: how many practices are absent, of how many expected. */
+export function PracticeCell({ p }: { p: Practices | null }) {
+  if (!p) return <span className="muted small">—</span>;
+  return (
+    <span className="practice-cell" title={`${p.done} en place, ${p.partial} partielles, ${p.missing} absentes, ${p.unknown} non vérifiées`}>
+      <strong className={p.missing ? "tone-text-fail" : "tone-text-pass"}>{p.missing}</strong> {plural(p.missing, "absente")}
+      <span className="muted small"> sur {p.counted}{p.partial > 0 && ` · ${p.partial} ${plural(p.partial, "partielle")}`}</span>
     </span>
   );
 }

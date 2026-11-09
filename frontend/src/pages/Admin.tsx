@@ -103,11 +103,17 @@ export default function Admin() {
 const FIELDS: { key: string; label: string; type: "time" | "number"; help: string; max?: number }[] = [
   { key: "sync_at", label: "Synchronisation des projets", type: "time", help: "Heure de Paris" },
   { key: "catch_up_at", label: "Revue nocturne", type: "time", help: "Heure de Paris" },
+  { key: "feeds_at", label: "Lecture des flux KEV et EPSS (miroir interne)", type: "time", help: "Heure de Paris" },
   { key: "rollup_at", label: "Agrégat mensuel et purge", type: "time", help: "Heure de Paris" },
   { key: "on_demand_per_hour", label: "Analyses à la demande par utilisateur et par heure", type: "number", help: "1 à 1000", max: 1000 },
   { key: "evidence_days", label: "Conservation des preuves brutes (jours)", type: "number", help: "1 à 90", max: 90 },
   { key: "branch_run_days", label: "Conservation des analyses de branche (jours)", type: "number", help: "1 à 365", max: 365 },
   { key: "alert_drop", label: "Alerte si le score baisse d'au moins (points)", type: "number", help: "1 à 100 ; envoi au webhook d'alerte s'il est configuré", max: 100 },
+  { key: "sla_critical_hours", label: "Délai de correction d'une vulnérabilité critique (heures)", type: "number", help: "1 à 720 ; compté depuis la première détection", max: 720 },
+  { key: "sla_high_days", label: "Délai de correction d'une vulnérabilité haute (jours)", type: "number", help: "1 à 365", max: 365 },
+  { key: "sla_medium_days", label: "Délai de correction d'une vulnérabilité moyenne (jours)", type: "number", help: "1 à 365", max: 365 },
+  { key: "epss_high_pct", label: "EPSS élevé à partir de (%)", type: "number", help: "1 à 100 ; au-delà, la priorité monte d'un niveau", max: 100 },
+  { key: "sla_low_days", label: "Délai de correction d'une vulnérabilité basse (jours)", type: "number", help: "1 à 730", max: 730 },
 ];
 
 function SettingsForm() {

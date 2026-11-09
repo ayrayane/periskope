@@ -45,7 +45,7 @@ query($path: ID!, $branch: String!, $since: Time!) {
       status createdAt finishedAt
       jobArtifacts { fileType }
       testReportSummary { total { count } testSuites { nodes { name totalCount } } } } }
-    vulnerabilities(state: [DETECTED, CONFIRMED], first: 100) { nodes { reportType severity title identifiers { externalType externalId } } } # ee
+    vulnerabilities(state: [DETECTED, CONFIRMED], first: 100) { nodes { reportType severity title detectedAt identifiers { externalType externalId } } } # ee
     vulnerabilitySeveritiesCount(state: [DETECTED, CONFIRMED]) { critical high medium low info unknown } # ee
   }
 }

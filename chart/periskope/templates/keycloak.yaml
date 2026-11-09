@@ -1,6 +1,6 @@
 {{- if .Values.keycloakClient.enabled }}
-# Browser client (authorization code + PKCE). Its roles are viewer, maintainer and admin: a user holding one gets
-# this client in the token's aud through Keycloak's audience resolution, which the API requires.
+# Browser client (authorization code + PKCE). Its roles are viewer, maintainer and admin; the API accepts the tokens
+# issued to this client (azp), whatever their aud.
 apiVersion: k8s.keycloak.org/v2alpha1
 kind: KeycloakOIDCClient
 metadata: { name: {{ .Values.oidc.clientId }}, namespace: {{ .Values.keycloakClient.namespace }} }

@@ -1,0 +1,31 @@
+# Daily copy of the KEV (CISA) and EPSS (FIRST) feeds into a Nexus raw repository, for Periskope on a network without Internet.
+# Runs on a runner that can reach the Internet; schedule it once a day (CI/CD > Schedules), e.g. 23:00 UTC.
+# Periskope then reads, each night, the most recent of the last 7 days:
+#   vulnFeeds.kevUrl:  $NEXUS_URL/repository/$NEXUS_REPO/kev/known_exploited_vulnerabilities-{date}.json
+#   vulnFeeds.epssUrl: $NEXUS_URL/repository/$NEXUS_REPO/epss/epss_scores-{date}.csv.gz
+# CI/CD variables: NEXUS_URL (e.g. https://nexus.internal), NEXUS_REPO (a raw hosted repository, e.g. vuln-feeds);
+# NEXUS_USER and NEXUS_PASSWORD only if the repository refuses anonymous uploads.
+
+vuln-feeds:
+  image: alpine:3.20
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web"
+  variables:
+    KEV_SRC: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    EPSS_SRC: https://epss.empiricalsecurity.com/epss_scores-current.csv.gz
+  script:
+    - apk add --no-cache curl jq
+    - DAY=$(date -u +%F)
+    - curl -fsSL --retry 3 -o kev.json "$KEV_SRC"
+    - curl -fsSL --retry 3 -o epss.csv.gz "$EPSS_SRC"
+    # Never publish a broken file: KEV must be JSON with vulnerabilities, EPSS a gzip whose CSV has its header.
+    - test "$(jq '.vulnerabilities | length' kev.json)" -gt 100
+    - gzip -dc epss.csv.gz | sed -n 2p | grep -q '^cve,epss,percentile'
+    - AUTH=${NEXUS_USER:+--user "$NEXUS_USER:$NEXUS_PASSWORD"}
+    - BASE="$NEXUS_URL/repository/$NEXUS_REPO"
+    - curl -fsS $AUTH --upload-file kev.json "$BASE/kev/known_exploited_vulnerabilities-$DAY.json"
+    - curl -fsS $AUTH --upload-file epss.csv.gz "$BASE/epss/epss_scores-$DAY.csv.gz"
+    - echo "KEV $(jq -r .catalogVersion kev.json), EPSS $(gzip -dc epss.csv.gz | head -1) published for $DAY"
+  artifacts:
+    paths: [kev.json, epss.csv.gz]
+    expire_in: 2 days

@@ -7,12 +7,11 @@ from periskope_core.scoring import activity_status, score
 
 P = lambda i: Check(i, "", "", "x", 1, Kind.PROOF)
 H = lambda i: Check(i, "", "", "x", 1, Kind.HINT)
-SEC = lambda i: Check(i, "", "", "x", 1, Kind.SECONDARY)
 
 
 def test_catalog_matches_spec():
-    assert len(CHECKS) == 53 and len(ACTIVITIES) == 41
-    assert len({c.id for c in CHECKS}) == 53
+    assert len(CHECKS) == 47 and len(ACTIVITIES) == 41
+    assert len({c.id for c in CHECKS}) == 47
 
 
 def test_activity_rules():
@@ -24,11 +23,6 @@ def test_activity_rules():
     assert activity_status([P("a")], {"a": S.NOT_APPLICABLE}) == (A.NOT_APPLICABLE, False)
     # A hint that decides flags the activity "to confirm".
     assert activity_status([P("a"), H("h")], {"a": S.PASS, "h": S.PASS}) == (A.IMPLEMENTED, True)
-
-
-def test_secondary_only_when_main_inconclusive():
-    assert activity_status([P("a"), SEC("s")], {"a": S.FAIL, "s": S.PASS}) == (A.NOT_IMPLEMENTED, False)
-    assert activity_status([P("a"), SEC("s")], {"a": S.UNKNOWN, "s": S.PASS}) == (A.IMPLEMENTED, False)
 
 
 def test_unknown_lowers_coverage_not_score():

@@ -58,14 +58,31 @@ export interface Group { instance: string; path: string; projects: number; analy
 
 export interface Vulns { critical: number; high: number; medium: number; low: number; info: number; unknown: number }
 
-export interface VulnItem { key: string; cve: boolean; title: string; severity: keyof Vulns; projects: number }
-export interface VulnProject { instance: string; path: string; score: number | null; coverage: number | null; severity: keyof Vulns; type: string }
+export interface VulnItem { key: string; cve: boolean; title: string; severity: keyof Vulns; projects: number; detected_at: string | null; overdue: number; priority: keyof Vulns; kev: boolean; epss: number | null; percentile: number | null }
+export interface VulnProject { instance: string; path: string; score: number | null; coverage: number | null; severity: keyof Vulns; type: string; detected_at: string | null; overdue: boolean; priority: keyof Vulns; kev: boolean; epss: number | null }
+/** Correction deadlines in hours by severity (critical, high, medium, low). */
+export type Sla = Partial<Record<keyof Vulns, number>>;
+/** One analysed branch of a project: its latest run and its latest successful score. */
+export interface BranchScore { branch: string; last_id: number; last_status: Run["status"]; last_at: string; run_id: number | null; score: number | null; coverage: number | null; finished_at: string | null; commit_sha: string | null }
+
+/** The practices behind a score, up to the target level: done, partial, missing (absent), not verified, and how many are expected. */
+export interface Practices { done: number; partial: number; missing: number; unknown: number; counted: number }
+/** Whether a project's vulnerability count can be trusted: it reports some, it publishes an SBOM and has none, it has no SBOM (zero means nothing), or it is not measured. */
+export type VulnCoverage = "reporting" | "clean" | "blind" | "unmeasured";
 
 export interface Summary { total: number; analysed: number; score: number | null; coverage: number | null; below_target: number; failed: number; never: number; high: number; mid: number; low: number; dimensions: Record<string, number>;
   gaps: { activity: string; level: number; missing: number; measured: number }[];
   lowest: { instance: string; path: string; score: number; coverage: number; last_success_at: string | null }[];
+  // Projects with every level-1 practice in place; compared with their score 30 days ago (compared: those with such a history); never analysed or last analysis failed.
+  foundation_ok: number; improving: number; declining: number; compared: number; unmeasured: number;
+  // Averages per analysed project; null before any analysis.
+  practices: (Practices & { projects: number }) | null;
+  vuln_coverage: Record<VulnCoverage, number>;
   // null: no project of the scope measured (GitLab without Ultimate).
-  vulns: (Vulns & { total: number; projects: number; exposed: { instance: string; path: string; vulns: Vulns }[] }) | null }
+  vulns: (Vulns & { total: number; projects: number; exposed: { instance: string; path: string; vulns: Vulns }[]; sla_hours: Sla; overdue: Sla; by_priority: Sla; dated: number; kev: number }) | null;
+  feeds: Record<"kev" | "epss", Feed> }
+/** An exploitation feed read from the internal mirror: configured or not, last good read, last error. */
+export interface Feed { configured: boolean; fetched_at?: string | null; rows?: number | null; published?: string | null; error?: string | null }
 
 export interface ProjectRow {
   id: number;
@@ -82,6 +99,8 @@ export interface ProjectRow {
   last_run_id: number | null;
   last_status: string | null;
   vulns: Vulns | null;
+  practices: Practices | null;
+  vuln_coverage: VulnCoverage;
 }
 
 export interface CheckResult {
@@ -118,7 +137,7 @@ export interface Check {
   source: string;
   activity: string;
   level: number;
-  kind: "proof" | "hint" | "secondary";
+  kind: "proof" | "hint";
   scope: { decision: "retained" | "excluded"; reason: string } | null;
   fix: Fix | null;
 }

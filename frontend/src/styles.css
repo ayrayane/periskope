@@ -53,7 +53,7 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; tex
 .chip { display: inline-flex; gap: 6px; align-items: center; padding: 5px 10px; border: 1px solid var(--field-line); border-radius: 999px; background: var(--surface); font-size: 0.9rem; }
 
 .table { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.row { display: grid; grid-template-columns: minmax(0, 2.4fr) 1.3fr 1fr 1.2fr; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); min-height: 56px; }
+.row { display: grid; grid-template-columns: minmax(0, 2.2fr) 1.2fr 1.2fr 0.9fr 1.1fr; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); min-height: 56px; }
 .row.head { min-height: 0; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
 .row .name { display: flex; flex-direction: column; min-width: 0; }
 .row .name a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -94,10 +94,10 @@ th { font-size: 0.85rem; color: var(--muted); }
 
 @media (max-width: 640px) {
   .row { grid-template-columns: 1fr auto; min-height: 0; }
-  .row > :nth-child(3), .row > :nth-child(4) { grid-column: 1 / -1; }
-  .row > :nth-child(3)::before { content: "Dernière réussite : "; color: var(--muted); }
+  .row > :nth-child(3), .row > :nth-child(4), .row > :nth-child(5) { grid-column: 1 / -1; }
+  .row > :nth-child(4)::before { content: "Dernière réussite : "; color: var(--muted); }
   .row.head > :nth-child(n + 3) { display: none; }
-  .row.head > :nth-child(3)::before { content: none; }
+  .row.head > :nth-child(4)::before { content: none; }
   /* Wrap long project paths on a phone rather than cut them. */
   .row .name a { white-space: normal; overflow-wrap: anywhere; }
 }
@@ -191,7 +191,7 @@ h2 { font-weight: 750; letter-spacing: -0.01em; }
 .hero { display: grid; gap: 18px; margin-bottom: 20px; }
 .hero h1 { font-size: clamp(2rem, 4vw, 2.9rem); letter-spacing: -0.03em; }
 .hero-sub { margin: 0; color: var(--muted); }
-.kpis { display: grid; grid-template-columns: 1.4fr repeat(3, 1fr); gap: 14px; }
+.kpis { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: 14px; }
 a.kpi { text-decoration: none; }
 .kpi { --tone: var(--accent); --tone-bg: var(--accent-soft); position: relative; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 16px 18px 16px 22px; background: var(--surface); color: var(--ink); text-align: left; font: inherit; transition: transform 0.2s ease, box-shadow 0.2s ease; }
 .kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; background: var(--tone); }
@@ -452,10 +452,10 @@ button.nav-toggle[aria-expanded="true"] { transform: rotate(90deg); }
 .head-score > .small { white-space: nowrap; }
 
 /* Lot 3: trend, heat map, exports, committee report */
-.dash { grid-template-areas: "watch wide wide" "watch gaps dist" "trend heat heat"; }
+.dash { grid-template-areas: "watch wide wide" "pract gaps dist" "trend heat heat"; }
 .trend { grid-area: trend; }
 .heat-area { grid-area: heat; min-width: 0; }
-@media (max-width: 1000px) { .dash { grid-template-areas: "watch" "wide" "gaps" "dist" "trend" "heat"; } }
+@media (max-width: 1000px) { .dash { grid-template-areas: "watch" "wide" "pract" "gaps" "dist" "trend" "heat"; } }
 .trend-chart { width: 100%; height: auto; display: block; margin-bottom: 10px; }
 .trend-chart .grid { stroke: var(--line); }
 .trend-chart .area { fill: color-mix(in srgb, var(--lav) 18%, transparent); }
@@ -559,10 +559,11 @@ table.t-fixed td { overflow-wrap: anywhere; }
 @media print { .no-print { display: none !important; } .report-summary { border: 1px solid #ccc; box-shadow: none; } }
 
 /* Open vulnerabilities: severity tones from the vivid scale, every count also written beside its swatch. */
-:root { --sev-critical: #a1001a; --sev-medium: #f2c200; --sev-low: #7aa7d9; }
-@media (prefers-color-scheme: dark) { :root { --sev-critical: #ff6b7a; --sev-medium: #ffd60a; --sev-low: #5e8fc7; } }
-.sev-critical { background: var(--sev-critical); } .sev-high { background: var(--vivid-fail); } .sev-medium { background: var(--sev-medium); }
-.sev-low { background: var(--sev-low); } .sev-other { background: var(--vivid-none); }
+/* Severity colours of GitLab's vulnerability report (GitLab UI tokens red-800, red-600, orange-400, orange-300, blue-400, neutral-400),
+   so a severity reads the same in Periskope and in GitLab's Security tab. */
+:root { --sev-critical: #891c2f; --sev-high: #c52042; --sev-medium: #e95f21; --sev-low: #fb8017; --sev-info: #3f8edd; --sev-unknown: #8a8888; }
+.sev-critical { background: var(--sev-critical); } .sev-high { background: var(--sev-high); } .sev-medium { background: var(--sev-medium); }
+.sev-low { background: var(--sev-low); } .sev-info { background: var(--sev-info); } .sev-other { background: var(--sev-unknown); }
 .vulns { margin-bottom: 18px; }
 .vulns-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; align-items: start; }
 .sev-bands { margin-top: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
@@ -607,3 +608,43 @@ button.sort { text-transform: inherit; letter-spacing: inherit; font-size: inher
 /* Below 1400 px the heatmap needs the full width to show every dimension. */
 @media (min-width: 1001px) and (max-width: 1400px) { .dash { grid-template-areas: "watch wide wide" "watch gaps dist" "heat heat heat" "trend trend trend"; } .trend-chart { max-width: 720px; } }
 .report-table + .report-table { margin-top: 16px; }
+
+/* Practices behind a score: absent first, every count written next to its icon. */
+.practices-card { grid-area: pract; }
+.practices { display: grid; gap: 10px; }
+.practices-head { font-size: 1rem; text-align: left; }
+.practices-head strong { font-size: 1.6rem; color: var(--fail); font-variant-numeric: tabular-nums; margin-right: 2px; }
+.practice-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.tone-amber { color: var(--amber); background: var(--amber-bg); }
+.practice-cell { font-size: 0.9rem; }
+.practice-cell .muted { display: block; }
+.practice-cell strong { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.tone-text-fail { color: var(--fail); } .tone-text-pass { color: var(--pass); }
+.head-score .practices { justify-items: center; width: 300px; }
+.head-score .practices-head { text-align: center; }
+.head-score .practice-chips { justify-content: center; }
+
+/* Vulnerability coverage: can a zero be trusted? */
+.cov-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cov-pct { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.seg-reporting { background: var(--vivid-amber); } .seg-clean { background: var(--vivid-pass); } .seg-blind { background: var(--vivid-fail); } .seg-unmeasured { background: var(--vivid-none); }
+.cov-bands { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 14px; }
+.cov-bands button { all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); min-height: 44px; }
+.cov-bands button:hover { background: var(--bg); }
+.cov-bands button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.cov-bands button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.cov-bands button strong { margin-left: auto; font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.cov-list { margin-top: 16px; }
+.cov-list ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.cov-list li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.vulns-overview { margin-bottom: 18px; }
+.cvss-range { display: block; font-weight: 400; white-space: nowrap; }
+.badge.age-late { white-space: nowrap; }
+.deadlines { margin-top: 18px; }
+.deadlines td .muted { margin-left: 6px; }
+.branch-tag { margin-left: 8px; }
+.branch-filter { display: block; max-width: 320px; margin-bottom: 12px; }
+.kpi-pass { --tone: var(--pass); --tone-bg: var(--pass-bg); }
+.kpi-accent { --tone: var(--accent); --tone-bg: var(--accent-soft); }
+.priority { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.badge.kev { white-space: nowrap; }

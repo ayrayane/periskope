@@ -105,7 +105,7 @@ def client(db, database_url, monkeypatch):
 
     monkeypatch.setenv("PERISKOPE_DATABASE_URL", database_url)
     monkeypatch.setenv("PERISKOPE_VALKEY_URL", os.environ.get("PERISKOPE_TEST_VALKEY_URL", "redis://localhost:56379"))
-    for k in ("OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_CLIENT_ID"):
+    for k in ("OIDC_ISSUER", "OIDC_CLIENT_ID"):
         monkeypatch.setenv(f"PERISKOPE_{k}", "https://kc.test/realms/x" if k == "OIDC_ISSUER" else "periskope")
     who = {"v": None}
     api.app.dependency_overrides[api.current] = lambda: who["v"]
@@ -221,8 +221,6 @@ def test_scope_api(client, db, tmp_path):
     assert project["statuses"]["Version control"]["status"] == "out_of_scope"
     rows = {(r["target"], r["target_id"]): r for r in client.get("/api/v1/scope?instance=gl&project=team-a/app").json()}
     assert rows[("activity", "Version control")]["level"] == "projet" and not rows[("activity", "Version control")]["inherited"]
-    # The Scorecard checks come from the organisation's default decision.
-    assert rows[("check", "scorecard.code_review")]["inherited"] and rows[("check", "scorecard.code_review")]["decision"] == "excluded"
     assert client.delete("/api/v1/scope/Version control?target=activity&instance=gl&project=team-a/app").status_code == 204
     assert client.get("/api/v1/projects/gl/team-a/app").json()["statuses"]["Version control"]["status"] == "implemented"
     summary = client.get("/api/v1/projects/summary").json()
@@ -412,17 +410,33 @@ def test_other_team_reaches_nothing(client, db, tmp_path):
     assert [r["key"] for r in client.get("/api/v1/groups/heatmap?instance=gl").json()["rows"]] == ["team-ab"]
     summary = client.get("/api/v1/projects/summary").json()
     assert summary["total"] == 1
+    # Practices behind the score add up, and a project with open vulnerabilities counts as covered.
+    row = client.get("/api/v1/projects").json()["items"][0]
+    assert sum(row["practices"][k] for k in ("done", "partial", "missing", "unknown")) == row["practices"]["counted"] > 0
+    assert summary["practices"]["missing"] == row["practices"]["missing"]
+    assert row["vuln_coverage"] == "reporting" and summary["vuln_coverage"] == {"reporting": 1, "clean": 0, "blind": 0, "unmeasured": 0}
+    assert client.get("/api/v1/projects?vuln_coverage=blind").json()["items"] == []
+    # A fully compliant project has its level-1 foundation; no history older than 30 days, so no trend yet.
+    assert (summary["foundation_ok"], summary["unmeasured"], summary["compared"], summary["improving"]) == (1, 0, 0, 0)
+    assert client.get("/api/v1/projects?foundation_missing=true").json()["items"] == []
+    assert client.get("/api/v1/projects?trend=down").json()["items"] == client.get("/api/v1/projects?unmeasured=true").json()["items"] == []
     # Open vulnerabilities add up over the viewer's scope only, and name only their projects.
     assert summary["vulns"]["total"] == 4 and summary["vulns"]["projects"] == 1
     assert [e["path"] for e in summary["vulns"]["exposed"]] == ["team-ab/other"]
     vulns = client.get("/api/v1/vulnerabilities").json()
     assert vulns["measured"] == 1 and [(v["key"], v["severity"], v["projects"]) for v in vulns["items"]] == [("CVE-2021-44228", "critical", 1), ("Weak hash", "low", 1)]
     assert [v["key"] for v in client.get("/api/v1/vulnerabilities?q=log4").json()["items"]] == ["CVE-2021-44228"]
+    # Log4Shell, open since 2021, is past the 24 h deadline of a critical; the low one, detected later, is not.
+    assert [(v["key"], v["overdue"]) for v in vulns["items"]] == [("CVE-2021-44228", 1), ("Weak hash", 0)]
+    assert summary["vulns"]["overdue"] == {"critical": 1, "low": 0} and summary["vulns"]["dated"] == 2
+    assert client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()[0]["overdue"] is True
+    assert [(b["branch"], b["last_status"]) for b in client.get("/api/v1/projects/gl/team-ab/other/branch-scores").json()] == [("main", "succeeded")]
+    assert client.get("/api/v1/projects/gl/team-a/app/branch-scores").status_code == 404
     assert [r["path"] for r in client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()] == ["team-ab/other"]
     client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
     assert client.get("/api/v1/projects/summary").json()["vulns"]["critical"] == 2
     assert [r["path"] for r in client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()] == ["team-a/app", "team-ab/other"]
-    assert client.get("/api/v1/vulnerabilities?instance=gl&namespace=teamxa").json() == {"measured": 0, "items": []}
+    assert {k: v for k, v in client.get("/api/v1/vulnerabilities?instance=gl&namespace=teamxa").json().items() if k != "sla_hours"} == {"measured": 0, "items": []}
     assert client.get("/api/v1/projects/summary?instance=gl&namespace=teamxa").json()["vulns"] is None  # never measured: unknown, not 0
     client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "bob", namespaces=frozenset({("gl", "team-ab")}))
 
@@ -467,3 +481,60 @@ def test_empty_webhook_secret_accepts_nothing(tmp_path, monkeypatch):
     hook = TestClient(scheduler.app)  # no lifespan: the check happens before any database or queue access
     assert hook.post("/hooks/gitlab/gl", json={"object_kind": "push"}).status_code == 401
     assert hook.post("/hooks/gitlab/gl", json={"object_kind": "push"}, headers={"X-Gitlab-Token": ""}).status_code == 401
+
+
+def test_exploitation_feeds_set_priority_and_deadline(client, database_url, monkeypatch):
+    """KEV and EPSS read from the mirror decide the priority: exploited is critical, unlikely brings a critical down to high."""
+    import asyncio
+    import gzip
+    import json as js
+    from datetime import UTC, datetime, timedelta
+
+    import httpx
+    import respx
+    from periskope_scheduler import feeds
+
+    # A daily archive: today's file is not there yet, yesterday's is.
+    monkeypatch.setenv("PERISKOPE_KEV_URL", "https://nexus.internal/feeds/kev-{date}.json")
+    today = datetime.now(UTC).date()
+    kev_today, kev_yesterday = (f"https://nexus.internal/feeds/kev-{d.isoformat()}.json" for d in (today, today - timedelta(days=1)))
+    monkeypatch.setenv("PERISKOPE_EPSS_URL", "https://mirror.internal/epss.csv.gz")
+    kev = {"catalogVersion": "2026.11.08", "vulnerabilities": [{"cveID": "CVE-2023-0001", "dateAdded": "2026-01-02", "dueDate": "2026-01-23",
+                                                                 "knownRansomwareCampaignUse": "Known"}]}
+    epss = gzip.compress(b"#model_version:v2025.03.14,score_date:2026-11-08T00:00:00+0000\ncve,epss,percentile\n"
+                         b"CVE-2023-0001,0.9,0.99\nCVE-2023-0002,0.001,0.1\nCVE-2023-0003,0.4,0.97\n")
+    findings = [  # one project, three CVEs detected long ago
+        {"key": "CVE-2023-0001", "cve": True, "severity": "medium", "title": "a", "type": "dependency_scanning", "detected_at": "2026-01-01T00:00:00Z"},
+        {"key": "CVE-2023-0002", "cve": True, "severity": "critical", "title": "b", "type": "dependency_scanning", "detected_at": "2026-11-05T00:00:00Z"},
+        {"key": "CVE-2023-0003", "cve": True, "severity": "low", "title": "c", "type": "dependency_scanning", "detected_at": "2026-01-01T00:00:00Z"},
+    ]
+
+    async def scenario():
+        pool = await connect(database_url)
+        pid = await pool.fetchval("INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch)"
+                                  " VALUES ('gl', 9950, 'feeds/app', 'feeds', 'group', 'main') RETURNING id")
+        await pool.execute("INSERT INTO project_state (project_id, vulns, vuln_findings) VALUES ($1, $2, $3)",
+                           pid, {"critical": 1, "high": 0, "medium": 1, "low": 1, "info": 0, "unknown": 0}, findings)
+        with respx.mock:
+            respx.get(kev_today).mock(return_value=httpx.Response(404))
+            respx.get(kev_yesterday).mock(return_value=httpx.Response(200, content=js.dumps(kev).encode()))
+            respx.get("https://mirror.internal/epss.csv.gz").mock(return_value=httpx.Response(200, content=epss))
+            await feeds.refresh(pool)
+            # A broken feed the next night keeps yesterday's table and says why.
+            respx.get(kev_today).mock(return_value=httpx.Response(200, content=b"<html>proxy</html>"))
+            await feeds.refresh(pool)
+        await pool.close()
+
+    asyncio.run(scenario())
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
+    items = {v["key"]: v for v in client.get("/api/v1/vulnerabilities?instance=gl&namespace=feeds").json()["items"]}
+    assert (items["CVE-2023-0001"]["priority"], items["CVE-2023-0001"]["kev"]) == ("critical", True)   # exploited
+    assert items["CVE-2023-0002"]["priority"] == "high" and items["CVE-2023-0002"]["overdue"] == 0      # critical but EPSS 0.1 %: 7 days
+    assert items["CVE-2023-0003"]["priority"] == "medium" and items["CVE-2023-0003"]["epss"] == pytest.approx(0.4)  # low, EPSS 40 %: one up
+    assert list(items) == ["CVE-2023-0001", "CVE-2023-0002", "CVE-2023-0003"]  # by priority
+    summary = client.get("/api/v1/projects/summary?instance=gl&namespace=feeds").json()
+    assert summary["vulns"]["kev"] == 1 and summary["vulns"]["by_priority"] == {"critical": 1, "high": 1, "medium": 1}
+    assert summary["vulns"]["overdue"] == {"critical": 1, "high": 0, "medium": 1}
+    assert summary["feeds"]["kev"]["rows"] == 1 and summary["feeds"]["kev"]["error"] == "JSONDecodeError"
+    assert "nexus.internal" not in str(summary["feeds"])  # the internal address is never shown to users
+    assert summary["feeds"]["epss"]["rows"] == 3 and summary["feeds"]["epss"]["published"].startswith("2026-11-08")

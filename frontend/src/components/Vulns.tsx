@@ -1,13 +1,15 @@
 // Open vulnerabilities as GitLab counts them (CVE and other findings of its scanners), by severity: one bar, every count written.
 import type { Vulns } from "../api";
 
+// GitLab's severities follow the CVSS qualitative scale (FIRST); their colours are GitLab's own.
 const SEVERITIES = [
-  ["critical", "Critiques"],
-  ["high", "Hautes"],
-  ["medium", "Moyennes"],
-  ["low", "Basses"],
-  ["other", "Autres"],
+  ["critical", "Critiques", "CVSS 9,0 à 10"],
+  ["high", "Hautes", "CVSS 7,0 à 8,9"],
+  ["medium", "Moyennes", "CVSS 4,0 à 6,9"],
+  ["low", "Basses", "CVSS 0,1 à 3,9"],
+  ["other", "Autres", "sans score CVSS"],
 ] as const;
+export const CVSS: Record<string, string> = Object.fromEntries(SEVERITIES.map(([k, , range]) => [k, range]));
 
 export const total = (v: Vulns) => v.critical + v.high + v.medium + v.low + v.info + v.unknown;
 
@@ -21,7 +23,7 @@ export function VulnBar({ v }: { v: Vulns }) {
       </div>
       <ul className="bands sev-bands">
         {SEVERITIES.map(([k, label]) => (
-          <li key={k}><span className={`swatch sev-${k}`} aria-hidden="true" /><span>{label}</span><strong>{n[k]}</strong></li>
+          <li key={k}><span className={`swatch sev-${k}`} aria-hidden="true" /><span>{label}<span className="muted small cvss-range">{CVSS[k]}</span></span><strong>{n[k]}</strong></li>
         ))}
       </ul>
     </>
@@ -40,5 +42,34 @@ const ONE: Record<Severity, string> = { critical: "Critique", high: "Haute", med
 
 /** One severity as a coloured dot and its word: the colour never speaks alone. */
 export function SevTag({ s }: { s: Severity }) {
-  return <span className="sev-tag"><span className={`swatch sev-${s === "info" || s === "unknown" ? "other" : s}`} aria-hidden="true" />{ONE[s]}</span>;
+  const k = s === "unknown" ? "other" : s;
+  return <span className="sev-tag" title={CVSS[k === "info" ? "other" : k]}><span className={`swatch sev-${k}`} aria-hidden="true" />{ONE[s]}</span>;
+}
+
+const PRIORITY: Record<string, string> = { critical: "Critique", high: "Élevée", medium: "Moyenne", low: "Faible" };
+
+/** The priority that sets the deadline: severity corrected by exploitation (KEV, EPSS). Colour of the matching CVSS level. */
+export function Priority({ p, kev, epss }: { p: Severity; kev?: boolean; epss?: number | null }) {
+  const label = PRIORITY[p];
+  return (
+    <span className="priority">
+      {label ? <span className="sev-tag"><span className={`swatch sev-${p}`} aria-hidden="true" />{label}</span> : <span className="muted small">—</span>}
+      {kev && <span className="badge tone-fail kev" title="Au catalogue KEV de la CISA : exploitée dans la nature">Exploitée (KEV)</span>}
+      {epss != null && <span className="muted small epss" title="Probabilité d'exploitation dans les 30 jours (EPSS)">EPSS {epss < 0.001 ? "< 0,1" : (epss * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %</span>}
+    </span>
+  );
+}
+
+/** Days and hours as a person says them: "3 h", "12 j", "1 an". */
+export function span(hours: number) {
+  return hours < 48 ? `${Math.round(hours)} h` : hours < 730 * 24 ? `${Math.round(hours / 24)} j` : `${Math.round(hours / 8760)} an${hours >= 1.5 * 8760 ? "s" : ""}`;
+}
+
+/** How long a vulnerability has been open, and whether it is past the correction deadline of its severity. */
+export function Age({ since, overdue, deadline }: { since: string | null; overdue: boolean; deadline?: number }) {
+  if (!since) return <span className="muted small">date inconnue</span>;
+  const age = span((Date.now() - Date.parse(since)) / 3_600_000);
+  return overdue
+    ? <span className="badge tone-fail age-late" title={deadline ? `Délai de correction : ${span(deadline)}` : undefined}>{age} · hors délai</span>
+    : <span className="muted small" title={deadline ? `Délai de correction : ${span(deadline)}` : undefined}>{age}</span>;
 }

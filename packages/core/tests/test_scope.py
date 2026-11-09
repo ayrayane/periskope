@@ -1,4 +1,4 @@
-from periskope_core.scope import DEFAULTS, Decision, ScopeDecision, Target, excluded
+from periskope_core.scope import Decision, ScopeDecision, Target, excluded
 
 
 def d(decision, instance=None, project_id=None, target_id="gitlab.renovate"):
@@ -11,6 +11,3 @@ def test_most_precise_wins():
     assert excluded(decisions, "gl", 8)[0] == {"gitlab.renovate"}
     assert excluded([d(Decision.EXCLUDED, "other")], "gl", 7)[0] == set()
 
-
-def test_scorecard_excluded_by_default():
-    assert len(excluded(DEFAULTS)[0]) == 6

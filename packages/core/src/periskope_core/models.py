@@ -11,8 +11,6 @@ class Kind(StrEnum):
     PROOF = "proof"
     # A pattern in a file, not an API answer: the activity it decides is flagged "to confirm".
     HINT = "hint"
-    # Only evaluated when the activity's other checks concluded nothing.
-    SECONDARY = "secondary"
 
 
 class Check(NamedTuple):

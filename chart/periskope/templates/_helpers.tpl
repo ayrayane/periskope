@@ -22,11 +22,14 @@ env:
   - { name: PERISKOPE_TIMEZONE, value: {{ .Values.timezone | quote }} }
   - { name: PERISKOPE_PUBLIC_URL, value: {{ printf "https://%s" .Values.host | quote }} }
   - { name: PERISKOPE_OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }} }
-  - { name: PERISKOPE_OIDC_AUDIENCE, value: {{ .Values.oidc.audience | quote }} }
   - { name: PERISKOPE_OIDC_CLIENT_ID, value: {{ .Values.oidc.clientId | quote }} }
   - { name: PERISKOPE_ROLE_MAP, value: {{ .Values.oidc.roleMap | toJson | quote }} }
+  - { name: PERISKOPE_ADMINS, value: {{ .Values.admins | toJson | quote }} }
   - { name: PERISKOPE_IDENTITY_MATCH, value: {{ .Values.identity.match | quote }} }
   - { name: PERISKOPE_GITLAB_LDAP_ONLY, value: {{ .Values.identity.gitlabLdapOnly | quote }} }
+  - { name: PERISKOPE_KEV_URL, value: {{ .Values.vulnFeeds.kevUrl | quote }} }
+  - { name: PERISKOPE_EPSS_URL, value: {{ .Values.vulnFeeds.epssUrl | quote }} }
+  - { name: PERISKOPE_FEEDS_PROXY, value: {{ .Values.vulnFeeds.proxy | quote }} }
   {{- if .Values.oidc.caConfigMap }}
   - { name: PERISKOPE_OIDC_CA_FILE, value: /etc/periskope/ca/ca.crt }
   - { name: SSL_CERT_FILE, value: /etc/periskope/ca/ca.crt }
