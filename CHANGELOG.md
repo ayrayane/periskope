@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — 2026-11-09
 
 **Retours UX**
 - Open vulnerabilities leave the dashboard (no tile, card or list badge): they live in the « Vulnérabilités » tab, and in a « Vulnérabilités » tab of the project page.
