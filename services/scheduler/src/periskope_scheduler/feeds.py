@@ -5,10 +5,13 @@ import csv
 import gzip
 import io
 import json
+import os
+import ssl
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import asyncpg
+import certifi
 import httpx
 import structlog
 from periskope_core.settings import env
@@ -65,11 +68,20 @@ async def fetch(client: httpx.AsyncClient, url: str) -> tuple[bytes, str]:
     raise FeedError(f"aucun fichier sur les {DAYS_BACK} derniers jours")
 
 
+def trust() -> ssl.SSLContext:
+    """Public authorities and the platform's private CA together: the official sites and an internal Nexus both verify.
+    (httpx would otherwise take SSL_CERT_FILE, the private CA alone, and refuse every public certificate.)"""
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    if (private := os.environ.get("SSL_CERT_FILE")) and os.path.exists(private):
+        ctx.load_verify_locations(cafile=private)
+    return ctx
+
+
 async def refresh(db: asyncpg.Pool) -> None:
     """Each configured feed; one that fails keeps yesterday's table and records why."""
     # The feeds' own proxy, if any: GitLab and Keycloak calls never go through it.
     proxy = env("FEEDS_PROXY", "") or None
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10), follow_redirects=True, proxy=proxy) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10), follow_redirects=True, proxy=proxy, verify=trust()) as client:
         for name, (var, parse, table, columns) in FEEDS.items():
             url = env(var, "")
             if not url:
@@ -81,8 +93,9 @@ async def refresh(db: asyncpg.Pool) -> None:
                     raise FeedError("flux vide")
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 # Shown to every user: the reason, never the address (httpx messages carry the internal URL).
+                # A transport error names the cause (certificate, DNS, timeout), never the URL; an HTTP error would carry it.
                 reason = (str(e) if isinstance(e, FeedError) else f"HTTP {e.response.status_code}" if isinstance(e, httpx.HTTPStatusError)
-                          else type(e).__name__)
+                          else f"{type(e).__name__}: {e}"[:200] if isinstance(e, httpx.TransportError) else type(e).__name__)
                 log.warning("feed_failed", feed=name, error=reason)
                 await db.execute(
                     "INSERT INTO vuln_feeds (name, url, error) VALUES ($1, $2, $3) ON CONFLICT (name) DO UPDATE SET url = $2, error = $3",

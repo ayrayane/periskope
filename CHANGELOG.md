@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1 — 2026-11-09
+
+- KEV and EPSS feeds: with a private CA (`oidc.caConfigMap`), the feeds trusted that CA alone and refused every public certificate (seen on the lab: `ConnectError`). They now trust the public authorities and the private CA together. A failed read says its cause (certificate, DNS, timeout), still never the address.
+
 ## 1.3.0 — 2026-11-09
 
 **Retours UX**
