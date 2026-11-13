@@ -397,7 +397,7 @@ function route(path: string, method: string): unknown {
     const dims = [...new Set(ACTIVITIES.map((a) => a.dimension))].sort();
     const gaps = ACTIVITIES.filter((a) => a.level <= TARGET).map((a) => {
       const measured = sc.filter((x) => ["implemented", "partial", "not_implemented"].includes(x.statuses![a.name].status));
-      return { activity: a.name, level: a.level, missing: measured.filter((x) => x.statuses![a.name].status !== "implemented").length, measured: measured.length };
+      return { activity: a.name, level: a.level, dimension: a.dimension, missing: measured.filter((x) => x.statuses![a.name].status !== "implemented").length, measured: measured.length };
     }).filter((g) => g.missing).sort((a, b) => b.missing - a.missing || a.level - b.level);
     return {
       envs: { prod: count("prod"), test: count("test"), dev: count("dev"), none: all.filter((x) => !x.topics.length).length, total: all.length },

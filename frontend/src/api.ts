@@ -76,7 +76,7 @@ export interface Practices { done: number; partial: number; missing: number; unk
 export type VulnCoverage = "reporting" | "clean" | "blind" | "unmeasured";
 
 export interface Summary { total: number; analysed: number; score: number | null; coverage: number | null; below_target: number; failed: number; never: number; high: number; mid: number; low: number; dimensions: Record<string, number>;
-  gaps: { activity: string; level: number; missing: number; measured: number }[];
+  gaps: { activity: string; level: number; dimension: string; missing: number; measured: number }[];
   lowest: { instance: string; path: string; score: number; coverage: number; last_success_at: string | null }[];
   // Projects with every level-1 practice in place; compared with their score 30 days ago (compared: those with such a history); never analysed or last analysis failed.
   foundation_ok: number; improving: number; declining: number; compared: number; unmeasured: number;

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1 — 2026-11-13
+
+- « Pratiques absentes » (Analyse): each practice shows its DSOMM family (icon, colour, name), its level and the share of projects; filter by family with counts. The DSOMM profile (Mesure) uses the same icons and colours. Family colours are the validated categorical palette (CVD-checked, light and dark), always written beside. API: `dimension` on each item of `gaps`.
+- Layout checked at 1440, 1280, 1024, 768 and 390 px: no side scroll, no overlap, nothing outside its card, no clipped text.
+
 ## 1.4.0 — 2026-11-13
 
 - Repository checks on large repositories: the tree is read whole (up to 50 000 entries or 120 s, instead of 1 000 entries); `.gitignore`, CODEOWNERS, SECURITY.md and the pre-commit files are read by name, exact whatever the size. A listing still cut never yields « non applicable » or « absent »: the check is unknown and says how much was read (`entries_read`, `files_read`, `truncated`). Before, a Dockerfile or a manifest past the first 1 000 entries made the practice not applicable and raised the score.

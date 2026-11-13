@@ -667,3 +667,32 @@ button.sort { text-transform: inherit; letter-spacing: inherit; font-size: inher
 .dash.analyse:not(:has(.watch)) > .work,
 .dash.analyse:not(:has(.watch)) > .gaps { grid-column: 1 / -1; }
 .heat-area:empty { display: none; }
+
+/* DSOMM families: one hue each (validated categorical palette, fixed order), always with the family icon and name. */
+:root { --fam-1: #2a78d6; --fam-2: #eb6834; --fam-3: #1baf7a; --fam-4: #eda100; --fam-5: #e87ba4; --fam-6: var(--muted); }
+@media (prefers-color-scheme: dark) { :root { --fam-1: #3987e5; --fam-2: #d95926; --fam-3: #199e70; --fam-4: #c98500; --fam-5: #d55181; } }
+.fam-1 { --fam: var(--fam-1); } .fam-2 { --fam: var(--fam-2); } .fam-3 { --fam: var(--fam-3); } .fam-4 { --fam: var(--fam-4); } .fam-5 { --fam: var(--fam-5); } .fam-6 { --fam: var(--fam-6); }
+/* The glyph is darkened toward the ink so it keeps 3:1 on its tint in both modes. */
+.fam-tile { display: inline-grid; place-items: center; flex: none; border-radius: 11px; background: color-mix(in srgb, var(--fam) 16%, var(--card)); color: color-mix(in srgb, var(--fam) 72%, var(--ink)); }
+.fam-filter { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 18px; }
+.fam-filter button { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 12px 4px 6px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 0.85rem; font-weight: 600; }
+.fam-filter button:first-child { padding-left: 14px; }
+.fam-filter button:hover { background: var(--na-bg); }
+.fam-filter button[aria-pressed="true"] { background: var(--ink-pill); color: var(--ink-pill-text); border-color: var(--ink-pill); }
+.fam-filter button[aria-pressed="true"] .sf-count { background: color-mix(in srgb, var(--ink-pill-text) 22%, transparent); color: var(--ink-pill-text); }
+.fam-filter .fam-tile { border-radius: 999px; }
+.fam-gaps li { grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; padding: 12px; border-radius: 16px; background: color-mix(in srgb, var(--fam) 5%, var(--card)); border: 1px solid color-mix(in srgb, var(--fam) 14%, var(--line)); }
+.fam-gaps .gap-name { line-height: 1.3; overflow-wrap: anywhere; }
+/* Text flow, not flex: the level chip stays beside the family name, which wraps like words when it must. */
+.gap-meta { display: block; font-size: 0.78rem; line-height: 1.5; color: var(--muted); }
+.fam-gaps .gap-level { display: inline-block; width: auto; height: auto; margin-right: 6px; padding: 0 7px; border-radius: 6px; font-size: 0.72rem; line-height: 1.5; vertical-align: 1px; }
+.fam-gaps .gap-bar { height: 6px; background: color-mix(in srgb, var(--fam) 14%, var(--na-bg)); }
+.fam-gaps .gap-bar span, .dim-list .gap-bar span { background: var(--fam); }
+.fam-gaps .gap-pct { align-self: center; white-space: nowrap; }
+.fam-gaps .gap-pct small { font-size: 0.7em; color: var(--muted); }
+.dim-list li { grid-template-columns: auto minmax(0, 1fr) auto; }
+.dim-list .fam-tile { grid-row: 1 / 3; }
+.dim-list .gap-name { grid-column: 2; }
+.dim-list .gap-bar { grid-column: 2; grid-row: 2; height: 6px; }
+.dim-list .gap-pct { grid-column: 3; grid-row: 1 / 3; }
+@media (max-width: 720px) { .gaps .gap-list { grid-template-columns: 1fr; } .fam-filter button { font-size: 0.8rem; } }

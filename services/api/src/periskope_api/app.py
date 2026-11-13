@@ -346,7 +346,8 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
         "SELECT p.instance, p.path, s.score, s.coverage, s.last_success_at FROM projects p JOIN project_state s ON s.project_id = p.id"
         f" WHERE {where} AND s.score IS NOT NULL ORDER BY s.score, p.path LIMIT 3", *params)
     return {**row, "envs": dict(envs), "dimensions": {d["dimension"]: d["score"] for d in dims},
-            "gaps": [dict(g) for g in gaps], "lowest": [dict(r) for r in lowest],
+            # Each absent practice with its DSOMM family (dimension), the grouping of the profile.
+            "gaps": [{**dict(g), "dimension": ACTIVITIES[g["activity"]].dimension} for g in gaps], "lowest": [dict(r) for r in lowest],
             # Average practices per analysed project, by status: what the mean score stands for.
             "practices": dict(avg) if avg["projects"] else None,
             "vuln_coverage": {b: 0 for b in ("reporting", "clean", "blind", "unmeasured")} | {c["bucket"]: c["n"] for c in cover},

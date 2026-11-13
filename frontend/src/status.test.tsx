@@ -43,3 +43,20 @@ test("sign-in only returns to a page of this site", () => {
   expect(safeReturn("/p/gl/team/app?vue=preuves")).toBe("/p/gl/team/app?vue=preuves");
   for (const evil of ["//evil.example", "/\\evil.example", "/x\\..\\evil", "https://evil.example", "evil", null, 42]) expect(safeReturn(evil)).toBe("/");
 });
+
+test("absent practices carry their DSOMM family and filter by it", async () => {
+  const { fireEvent } = await import("@testing-library/react");
+  const { Gaps } = await import("./pages/Portfolio");
+  const gap = (activity: string, dimension: string, missing: number) => ({ activity, dimension, level: 1, missing, measured: 10 });
+  const { container } = render(<Gaps gaps={[gap("Defined build process", "Build and Deployment", 6), gap("A patch policy is defined", "Culture and Organization", 3),
+    gap("Each team has a security champion", "Culture and Organization", 2)]} />);
+  const rows = () => [...container.querySelectorAll(".fam-gaps li")];
+  expect(rows().map((li) => li.className)).toEqual(["fam-1", "fam-2", "fam-2"]);
+  // Icons are decorative: the family name is written in each row.
+  expect(container.querySelectorAll(".fam-gaps .fam-tile[aria-hidden='true']").length).toBe(3);
+  fireEvent.click(screen.getByRole("button", { name: /Culture et organisation/ }));
+  expect(rows().length).toBe(2);
+  expect(screen.getByRole("button", { name: /Culture et organisation/ }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: /Toutes/ }));
+  expect(rows().length).toBe(3);
+});

@@ -11,6 +11,7 @@ import { ENVS, EnvFilter, ExportBar, HeatmapCard, scopeQuery, TrendCard } from "
 import Radar from "../components/Radar";
 import { PracticeCell, PracticeCounts, Score, Skeleton, when } from "../components/status";
 import { dimension, practice } from "../labels";
+import { FAMILIES, FamilyIcon, familySlot } from "../components/Dsomm";
 
 type Sort = "name" | "score" | "last_run";
 // What moves at a low maturity: the level-1 foundation, the trend, and what is not measured at all.
@@ -131,7 +132,8 @@ export default function Portfolio() {
               <Radar title="Score moyen par dimension" axes={Object.keys(s.dimensions).sort()} series={[{ label: "Moyenne du périmètre", values: s.dimensions, tone: "main" }]} />
               <ul className="dim-list">
                 {Object.entries(s.dimensions).sort().map(([d, v]) => (
-                  <li key={d}>
+                  <li key={d} className={`fam-${familySlot(d)}`}>
+                    <FamilyIcon dim={d} size={32} />
                     <span className="gap-name" title={d}>{dimension(d)}</span>
                     <span className="gap-bar" aria-hidden="true"><span style={{ width: `${v}%` }} /></span>
                     <span className="gap-pct">{Math.round(v)}</span>
@@ -183,28 +185,7 @@ export default function Portfolio() {
           </ul>
         )}
       </section>
-      <section className="card gaps" aria-labelledby="gaps-title">
-        <h2 id="gaps-title">Pratiques absentes <span className="muted small">{s.gaps.length}</span></h2>
-        <p className="card-sub">Toutes les pratiques qui manquent dans ce périmètre, les plus répandues d'abord : part des projets mesurés où la pratique est absente ou seulement partielle, jusqu'à leur niveau cible</p>
-        {s.gaps.length === 0 ? <p className="muted">Aucune pratique manquante.</p> : (
-          <ul className="gap-list">
-            {s.gaps.map((g) => {
-              const pct = Math.round((100 * g.missing) / Math.max(1, g.measured));
-              return (
-                <li key={g.activity}>
-                  <span className="gap-level" title={`Niveau ${g.level}`}>N{g.level}</span>
-                  <span className="gap-body">
-                    <span className="gap-name" title={g.activity}>{practice(g.activity)}</span>
-                    <span className="gap-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
-                    <span className="muted small">{g.missing} projet{g.missing > 1 ? "s" : ""} sur {g.measured}</span>
-                  </span>
-                  <span className="gap-pct">{pct} %</span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+      <Gaps gaps={s.gaps} />
       {s.lowest.length > 0 && <section className="card watch" aria-labelledby="watch-title">
         <h2 id="watch-title">À surveiller</h2>
         <p className="card-sub">Les projets les plus loin de leur niveau cible</p>
@@ -329,6 +310,48 @@ export default function Portfolio() {
 }
 
 /** Where the projects stand: one stacked bar with every band named and counted, never colour alone. */
+/** Every absent practice of the scope, most widespread first, with its DSOMM family; one family at a time on demand. */
+export function Gaps({ gaps }: { gaps: Summary["gaps"] }) {
+  const [family, setFamily] = useState<string | null>(null);
+  const count = (d: string) => gaps.filter((g) => g.dimension === d).length;
+  const shown = family ? gaps.filter((g) => g.dimension === family) : gaps;
+  return (
+    <section className="card gaps" aria-labelledby="gaps-title">
+      <h2 id="gaps-title">Pratiques absentes <span className="muted small">{gaps.length}</span></h2>
+      <p className="card-sub">Toutes les pratiques qui manquent dans ce périmètre, les plus répandues d'abord : part des projets mesurés où la pratique est absente ou seulement partielle, jusqu'à leur niveau cible</p>
+      {gaps.length === 0 ? <p className="muted">Aucune pratique manquante.</p> : (
+        <>
+          <div className="fam-filter" role="group" aria-label="Famille DSOMM">
+            <button type="button" aria-pressed={!family} onClick={() => setFamily(null)}>Toutes <span className="sf-count">{gaps.length}</span></button>
+            {FAMILIES.filter(count).map((d) => (
+              <button key={d} type="button" aria-pressed={family === d} onClick={() => setFamily(family === d ? null : d)}>
+                <FamilyIcon dim={d} size={22} />{dimension(d)} <span className="sf-count">{count(d)}</span>
+              </button>
+            ))}
+          </div>
+          <ul className="gap-list fam-gaps">
+            {shown.map((g) => {
+              const pct = Math.round((100 * g.missing) / Math.max(1, g.measured));
+              return (
+                <li key={g.activity} className={`fam-${familySlot(g.dimension)}`}>
+                  <FamilyIcon dim={g.dimension} />
+                  <span className="gap-body">
+                    <span className="gap-name" title={g.activity}>{practice(g.activity)}</span>
+                    <span className="gap-meta"><span className="gap-level" title={`Niveau DSOMM ${g.level}`}>N{g.level}</span>{dimension(g.dimension)}</span>
+                    <span className="gap-bar" role="img" aria-label={`${pct} % des projets mesurés`}><span style={{ width: `${pct}%` }} /></span>
+                    <span className="muted small">{g.missing} projet{g.missing > 1 ? "s" : ""} sur {g.measured}</span>
+                  </span>
+                  <span className="gap-pct">{pct}<small> %</small></span>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 function Distribution({ s }: { s: Summary }) {
   const bands = [
     { key: "high", label: "75 et plus", n: s.high },
