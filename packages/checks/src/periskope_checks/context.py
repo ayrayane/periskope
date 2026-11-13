@@ -6,15 +6,23 @@ import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import yaml
 from periskope_clients.gitlab import GitLab
 from periskope_clients.sonar import SonarQube
+from periskope_core.models import Outcome
 
 T = TypeVar("T")
 MAX_FILE_BYTES = 512 * 1024
-MAX_FILES = 30
+MAX_FILES = 40
+# The whole listing, read again only when the commit changes: up to 50 000 entries (100 per request) and 120 seconds,
+# well inside the analysis' own 300 s. GitLab lists folders before files, so a cut listing misses files first.
+MAX_TREE_ENTRIES = 50_000
+MAX_TREE_SECONDS = 120
+# Files whose path is fixed are read by name: a cut listing never hides them.
+FIXED_FILES = (".gitignore", ".pre-commit-config.yaml", ".editorconfig", "lefthook.yml", ".husky/pre-commit",
+               "CODEOWNERS", ".gitlab/CODEOWNERS", "docs/CODEOWNERS", "SECURITY.md", ".gitlab/SECURITY.md", "docs/SECURITY.md")
 SONAR_METRICS = "ncloc,vulnerabilities,security_hotspots,security_hotspots_reviewed,duplicated_lines_density"
 # The files repository checks read: security docs, Dockerfiles, CODEOWNERS, pre-commit config.
 READ_FILES = r"(^|/)(SECURITY|PATCH[_-]?POLICY|security[_-]policy)(\.md|\.rst|\.txt)?$|(^|/)(Docker|Container)file[^/]*$|^(\.gitlab/|docs/)?CODEOWNERS$|^\.pre-commit-config\.yaml$"
@@ -63,6 +71,13 @@ query($path: ID!, $ref: String!, $paths: [String!]!) {
   project(fullPath: $path) { repository { blobs(ref: $ref, paths: $paths) { nodes { path rawSize rawTextBlob } } } }
 }
 """
+
+
+class Tree(NamedTuple):
+    """Blob paths at the commit, whether the listing was cut short, and how many entries (files and folders) were read."""
+    paths: list[str]
+    truncated: bool
+    entries: int
 
 
 def once[T](fn: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
@@ -135,36 +150,57 @@ class Context:
         return strip_disabled(yaml.safe_load(merged) or {})
 
     @once
-    async def tree(self) -> tuple[list[str], bool] | None:
-        """Blob paths at the commit, and whether the listing was cut short."""
-        res = await self.gl.pages(f"{self.api}/repository/tree", recursive="true", ref=self.sha, pagination="keyset", max_pages=10)
+    async def tree(self) -> Tree | None:
+        res = await self.gl.pages(f"{self.api}/repository/tree", recursive="true", ref=self.sha, pagination="keyset",
+                                  max_pages=MAX_TREE_ENTRIES // 100, max_seconds=MAX_TREE_SECONDS)
         if res is None:
             return None
         items, truncated = res
-        return [i["path"] for i in items if i["type"] == "blob"], truncated
+        return Tree([i["path"] for i in items if i["type"] == "blob"], truncated, len(items))
 
     @once
-    async def repo_files(self) -> dict[str, str]:
-        """Every file a repository check reads, fetched in one call; files over the size cap are left out."""
+    async def blobs(self) -> dict[str, str] | None:
+        """Every file a repository check reads, in one call: the fixed paths by name, the others found in the listing.
+        Files over the size cap come back empty. None when GitLab does not answer."""
         tree = await self.tree()
         rx = re.compile(READ_FILES, re.IGNORECASE)
-        paths = [p for p in (tree[0] if tree else []) if rx.search(p)][:MAX_FILES]
-        if not paths:
-            return {}
-        data = await self.gl.graphql(BLOBS_QUERY, path=self.path, ref=self.sha, paths=paths)
-        blobs = nodes(((data or {}).get("project") or {}).get("repository"), "blobs") or []
-        return {b["path"]: b["rawTextBlob"] or "" for b in blobs if int(b.get("rawSize") or 0) <= MAX_FILE_BYTES}
+        listed = [p for p in (tree.paths if tree else []) if rx.search(p) and p not in FIXED_FILES]
+        data = await self.gl.graphql(BLOBS_QUERY, path=self.path, ref=self.sha, paths=[*FIXED_FILES, *listed][:MAX_FILES])
+        found = nodes(((data or {}).get("project") or {}).get("repository"), "blobs")
+        if found is None:
+            return None
+        return {b["path"]: (b["rawTextBlob"] or "") if int(b.get("rawSize") or 0) <= MAX_FILE_BYTES else "" for b in found}
 
     async def files(self, paths: list[str]) -> dict[str, str]:
-        files = await self.repo_files()
+        files = await self.blobs() or {}
         return {p: files[p] for p in paths if p in files}
 
+    async def has(self, path: str) -> bool | None:
+        """Whether a file at one of FIXED_FILES exists, read by name whatever the size of the repository."""
+        files = await self.blobs()
+        return None if files is None else path in files
+
     async def find(self, pattern: str) -> list[str] | None:
+        """Paths matching the pattern in the listing, plus the fixed paths read by name (found even past a cut)."""
         tree = await self.tree()
         if tree is None:
             return None
         rx = re.compile(pattern, re.IGNORECASE)
-        return [p for p in tree[0] if rx.search(p) and not NOT_PRODUCT.search(p)]
+        named = [p for p in await self.blobs() or {} if p not in tree.paths]
+        return [p for p in [*tree.paths, *named] if rx.search(p) and not NOT_PRODUCT.search(p)]
+
+    async def partial(self, absent: str) -> Outcome | None:
+        """When the listing was cut, what was not found may be in the part not read: unknown, saying how much was read.
+        None when the listing is whole, and the absence can be concluded."""
+        tree = await self.tree()
+        if tree is None:
+            return Outcome.unknown("arborescence illisible")
+        if not tree.truncated:
+            return None
+        n = f"{tree.entries:,}".replace(",", " ")
+        return Outcome.unknown(f"{absent} dans la partie lue de l'arborescence : {n} entrées lues ({len(tree.paths):,} fichiers), "
+                               f"la suite n'a pas été lue (limite de {MAX_TREE_ENTRIES:,} entrées ou {MAX_TREE_SECONDS} s)".replace(",", " "),
+                               entries_read=tree.entries, files_read=len(tree.paths), truncated=True)
 
     # SonarQube of the instance, when it has one and the project has a key.
     @once

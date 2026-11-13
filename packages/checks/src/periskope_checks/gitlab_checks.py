@@ -292,7 +292,7 @@ async def dockerfile_lint(ctx: Context) -> Outcome:
     if dockerfiles is None:
         return Outcome.unknown("arborescence illisible")
     if not dockerfiles:
-        return Outcome.not_applicable("aucun Dockerfile")
+        return await ctx.partial("aucun Dockerfile") or Outcome.not_applicable("aucun Dockerfile")
     jobs = await ci_match(ctx, r"hadolint|kics|iac[_-]sast|trivy.*config")
     if jobs is None:
         return Outcome.unknown("CI illisible")

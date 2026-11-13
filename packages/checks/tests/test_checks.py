@@ -23,6 +23,10 @@ def no_tree(d):
     d["tree"] = None
 
 
+def no_blobs(d):
+    d["blobs"] = None
+
+
 def ci(jobs):
     def apply(d):
         d["lint"]["merged_yaml"] = json.dumps(jobs)
@@ -32,6 +36,7 @@ def ci(jobs):
 def drop_paths(*names):
     def apply(d):
         d["tree"] = [t for t in d["tree"] if t["path"] not in names]
+        d["blobs"] = {k: v for k, v in d["blobs"].items() if k not in names}  # a deleted file has no content either
     return apply
 
 
@@ -129,9 +134,9 @@ CASES = {
     "repo.security_champion": (blob("CODEOWNERS", "* @alice"), no_tree),
     "repo.security_unit_tests": (drop_paths("tests/test_auth.py", "tests/integration/test_access_control.py"), no_tree),
     "repo.security_integration_tests": (drop_paths("tests/integration/test_access_control.py"), no_tree),
-    "repo.precommit_security": (blob(".pre-commit-config.yaml", "repos:\n- repo: https://github.com/psf/black\n"), no_tree),
-    "repo.gitignore": (drop_paths(".gitignore"), no_tree),
-    "repo.precommit_lint": (drop_paths(".pre-commit-config.yaml"), no_tree),
+    "repo.precommit_security": (blob(".pre-commit-config.yaml", "repos:\n- repo: https://github.com/psf/black\n"), no_blobs),
+    "repo.gitignore": (drop_paths(".gitignore"), no_blobs),
+    "repo.precommit_lint": (drop_paths(".pre-commit-config.yaml"), no_blobs),
     "sonar.false_positive": (lambda d: (set_(("sonar", "treated", "total"), 0)(d), measure("security_hotspots_reviewed", "0")(d)), no_sonar_project),
     "sonar.security_gate": (set_(("sonar", "gate_detail", "conditions"), [{"metric": "coverage", "op": "LT", "error": "80"}]), no_sonar_project),
     "sonar.hotspots_reviewed": (measure("security_hotspots_reviewed", "40.0"), no_sonar_project),
@@ -222,3 +227,48 @@ def test_security_referents_from_codeowners():
     from periskope_checks.repo_checks import security_lines
     text = "* @everyone\n[Security]\n/auth/ @alice @appsec-team\n[Docs]\n/docs/ @bob\nSECURITY.md @carol\n"
     assert security_lines(text) == ["[Security]", "/auth/ @alice @appsec-team", "SECURITY.md @carol"]
+
+
+def big_repo(d, folders=900, files=4100):
+    """A repository like the large ones: folders listed first (GitLab's keyset order), the useful files deep in the last pages."""
+    deep = ["services/api/Dockerfile", "services/web/package.json", "services/web/package-lock.json",
+            "services/api/tests/test_auth_permissions.py", "services/api/tests/integration/test_access_e2e.py"]
+    d["tree"] = ([{"path": f"dir{i}", "type": "tree"} for i in range(folders)]
+                 + [{"path": f"src/mod{i}/file{i}.py", "type": "blob"} for i in range(files - len(deep) - 4)]
+                 + [{"path": x, "type": "blob"} for x in deep + [".gitignore", "SECURITY.md", "CODEOWNERS", ".pre-commit-config.yaml"]])
+    d["blobs"]["services/api/Dockerfile"] = "FROM python:3.12-slim\n"
+    d["blobs"].pop("Dockerfile")
+
+
+REPO_IDS = ["repo.patch_policy", "repo.lockfiles", "repo.pinning_images", "repo.security_champion", "repo.security_unit_tests",
+            "repo.security_integration_tests", "repo.precommit_security", "repo.gitignore", "repo.precommit_lint", "gitlab.dockerfile_lint"]
+
+
+async def test_large_repository_is_read_whole(tmp_path):
+    """5 000 entries over 50 pages, the files after the folders: every check concludes from the whole listing."""
+    data = good()
+    big_repo(data)
+    ctx = context(data, tmp_path)
+    outcomes = await run_all(ctx, REPO_IDS)
+    assert {k: o.message for k, o in outcomes.items() if o.status != CheckStatus.PASS} == {}
+    tree = await ctx.tree()
+    assert (tree.entries, tree.truncated) == (5000, False)
+
+
+async def test_cut_listing_never_concludes_absence(tmp_path, monkeypatch):
+    """Past the limit nothing is « not applicable » or « absent » for want of reading: unknown, saying how much was read.
+    Fixed-path files (.gitignore, CODEOWNERS, SECURITY.md, pre-commit) are read by name and still conclude."""
+    from periskope_checks import context as ctx_mod
+    monkeypatch.setattr(ctx_mod, "MAX_TREE_ENTRIES", 1000)
+    data = good()
+    big_repo(data)
+    outcomes = await run_all(context(data, tmp_path), REPO_IDS)
+    status = {k: o.status for k, o in outcomes.items()}
+    assert CheckStatus.NOT_APPLICABLE not in status.values()
+    assert {k for k, v in status.items() if v == CheckStatus.UNKNOWN} == {
+        "repo.lockfiles", "repo.pinning_images", "repo.security_unit_tests", "repo.security_integration_tests", "gitlab.dockerfile_lint"}
+    for k in ("repo.patch_policy", "repo.security_champion", "repo.precommit_security", "repo.gitignore", "repo.precommit_lint"):
+        assert status[k] == CheckStatus.PASS, (k, outcomes[k].message)
+    msg = outcomes["repo.pinning_images"].message
+    assert "aucun Dockerfile" in msg and "1 000 entrées lues" in msg and "la suite n'a pas été lue" in msg
+    assert outcomes["repo.pinning_images"].evidence == {"entries_read": 1000, "files_read": 100, "truncated": True}

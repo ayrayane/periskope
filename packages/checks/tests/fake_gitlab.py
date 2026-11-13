@@ -81,10 +81,20 @@ def transport(data: dict[str, Any]) -> httpx.MockTransport:
         if path == "/api/graphql":
             body = json.loads(request.content)
             if "blobs(" in body["query"]:
+                if data["blobs"] is None:  # files unreadable: GitLab returns no project
+                    return httpx.Response(200, json={"data": {"project": None}})
                 wanted = body["variables"]["paths"]
-                blobs = [{"path": p, "rawSize": len(t), "rawTextBlob": t} for p, t in data["blobs"].items() if p in wanted]
+                # Every asked path that exists at the commit, as GitLab answers: its content, or "" when the test gives none.
+                files = {i["path"]: "" for i in data.get("tree") or [] if i["type"] == "blob"} | data["blobs"]
+                blobs = [{"path": p, "rawSize": len(t), "rawTextBlob": t} for p, t in files.items() if p in wanted]
                 return httpx.Response(200, json={"data": {"project": {"repository": {"blobs": {"nodes": blobs}}}}})
             return httpx.Response(200, json={"data": {"project": data["project"]}})
+        if path.endswith("/repository/tree") and data.get("tree") is not None:
+            # Keyset pages of per_page entries, the next one named by a Link header, as GitLab does.
+            start, size = int(request.url.params.get("page_token") or 0), int(request.url.params.get("per_page") or 20)
+            more = start + size < len(data["tree"])
+            link = {"link": f'<{request.url.copy_merge_params({"page_token": start + size})}>; rel="next"'} if more else {}
+            return httpx.Response(200, json=data["tree"][start:start + size], headers=link)
         routes = {"/approvals": "approvals", "/access_tokens": "access_tokens", "/ci/lint": "lint", "/repository/tree": "tree"}
         key = next((v for k, v in routes.items() if path.endswith(k)), None)
         if key is None or data.get(key) is None:

@@ -91,12 +91,15 @@ class GitLab:
         r.raise_for_status()
         return r.json()
 
-    async def pages(self, path: str, *, max_pages: int = 10, **params: Any) -> tuple[list[Any], bool] | None:
-        """Keyset or offset pagination; returns (items, truncated)."""
+    async def pages(self, path: str, *, max_pages: int = 10, max_seconds: float | None = None, **params: Any) -> tuple[list[Any], bool] | None:
+        """Keyset or offset pagination; returns (items, truncated). Stops at max_pages, or once max_seconds have passed."""
         items: list[Any] = []
         url: str | None = f"/api/v4{path}"
         query: dict[str, Any] | None = {"per_page": 100, **params}
+        until = time.monotonic() + max_seconds if max_seconds else None
         for _ in range(max_pages):
+            if until and items and time.monotonic() > until:
+                return items, True
             r = await self.request("GET", url, params=query)
             if r.status_code in (403, 404):
                 return None

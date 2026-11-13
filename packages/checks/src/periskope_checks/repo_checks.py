@@ -26,18 +26,13 @@ SECURITY_HOOKS = re.compile(r"gitleaks|detect-secrets|trufflehog|bandit|semgrep|
 SECURITY_TEST = r"(auth|secur|crypt|permission|access|csrf|xss|sanitiz|password|token|session)"
 
 
-def unknown_if_cut(truncated: bool, message: str) -> Outcome:
-    """A file not found in a cut listing may still exist: unknown, not fail."""
-    return Outcome.unknown("arborescence trop grande, lecture partielle") if truncated else Outcome.fail(message)
-
-
 @check("repo.patch_policy", Depends.COMMIT, "Décrire dans SECURITY.md comment et en combien de temps les failles sont corrigées.")
 async def patch_policy(ctx: Context) -> Outcome:
     docs = await ctx.find(r"(^|/)(SECURITY|PATCH[_-]?POLICY|security[_-]policy)(\.md|\.rst|\.txt)?$")
     if docs is None:
         return Outcome.unknown("arborescence illisible")
     if not docs:
-        return unknown_if_cut((await ctx.tree())[1], "aucune politique de sécurité ou de patch")
+        return await ctx.partial("aucune politique de sécurité ou de patch") or Outcome.fail("aucune politique de sécurité ou de patch")
     texts = await ctx.files(docs[:3])
     hits = [p for p, t in texts.items() if re.search(r"patch|correctif|mise à jour|update|fix|délai|within|days|jours", t, re.IGNORECASE)]
     return Outcome.ok("politique de patch documentée", files=hits) if hits else Outcome.fail("SECURITY.md sans politique de patch", files=docs)
@@ -48,14 +43,16 @@ async def lockfiles(ctx: Context) -> Outcome:
     tree = await ctx.tree()
     if tree is None:
         return Outcome.unknown("arborescence illisible")
-    paths = set(tree[0])
+    paths = set(tree.paths)
     manifests = [p for p in paths if p.rsplit("/", 1)[-1] in LOCKS and not NOT_PRODUCT.search(p)]
     if not manifests:
-        return Outcome.not_applicable("aucun manifeste de dépendances")
+        return await ctx.partial("aucun manifeste de dépendances") or Outcome.not_applicable("aucun manifeste de dépendances")
     missing = [m for m in manifests if not any(f"{m.rsplit('/', 1)[0] + '/' if '/' in m else ''}{lock}" in paths for lock in LOCKS[m.rsplit('/', 1)[-1]])]
+    # A cut listing may hide a lock file (fail unsure) or another manifest (pass unsure).
     if missing:
-        return unknown_if_cut(tree[1], f"{len(missing)} manifeste(s) sans verrouillage")
-    return Outcome.ok(f"{len(manifests)} manifeste(s) verrouillés", manifests=sorted(manifests)[:10])
+        return await ctx.partial(f"verrouillage de {len(missing)} manifeste(s) non trouvé") or Outcome.fail(f"{len(missing)} manifeste(s) sans verrouillage")
+    return await ctx.partial(f"{len(manifests)} manifeste(s) verrouillés, d'autres possibles") or Outcome.ok(
+        f"{len(manifests)} manifeste(s) verrouillés", manifests=sorted(manifests)[:10])
 
 
 @check("repo.pinning_images", Depends.COMMIT, "Épingler les images de base par tag de version ou par digest, jamais :latest.")
@@ -64,7 +61,7 @@ async def pinning_images(ctx: Context) -> Outcome:
     if dockerfiles is None:
         return Outcome.unknown("arborescence illisible")
     if not dockerfiles:
-        return Outcome.not_applicable("aucun Dockerfile")
+        return await ctx.partial("aucun Dockerfile") or Outcome.not_applicable("aucun Dockerfile")
     texts = await ctx.files(dockerfiles[:10])
     stages: set[str] = set()
     loose = []
@@ -79,7 +76,9 @@ async def pinning_images(ctx: Context) -> Outcome:
                 stages.add(alias.lower())
     if not texts:
         return Outcome.unknown("Dockerfile illisibles")
-    return Outcome.fail(f"{len(loose)} image(s) non épinglée(s)", images=loose[:10]) if loose else Outcome.ok("images de base épinglées")
+    if loose:
+        return Outcome.fail(f"{len(loose)} image(s) non épinglée(s)", images=loose[:10])
+    return await ctx.partial(f"{len(texts)} Dockerfile épinglés, d'autres possibles") or Outcome.ok("images de base épinglées")
 
 
 @check("repo.security_champion", Depends.COMMIT, "Désigner un référent sécurité dans CODEOWNERS (section [Security] ou fichiers sensibles).")
@@ -88,7 +87,8 @@ async def security_champion(ctx: Context) -> Outcome:
     if owners is None:
         return Outcome.unknown("arborescence illisible")
     if not owners:
-        return Outcome.fail("aucun fichier CODEOWNERS")
+        # CODEOWNERS has fixed paths, read by name: its absence is certain unless that read failed.
+        return Outcome.fail("aucun fichier CODEOWNERS") if await ctx.has("CODEOWNERS") is not None else Outcome.unknown("fichiers du dépôt illisibles")
     text = "\n".join((await ctx.files(owners)).values())
     if re.search(r"secur|sécu|appsec|champion|SECURITY\.md", text, re.IGNORECASE):
         # The handles of the security lines (or of the [Security] section): the critical-vulnerability alerts name them.
@@ -116,7 +116,7 @@ async def test_files(ctx: Context, kind: str) -> Outcome:
         tests = [t for t in tests if re.search(r"integ|e2e|end.to.end|functional", t, re.IGNORECASE)]
     if tests:
         return Outcome.ok(f"{len(tests)} fichier(s) de test de sécurité", files=tests[:10])
-    return unknown_if_cut((await ctx.tree())[1], "aucun test visant les composants de sécurité")
+    return await ctx.partial("aucun test visant les composants de sécurité") or Outcome.fail("aucun test visant les composants de sécurité")
 
 
 @check("repo.security_unit_tests", Depends.COMMIT, "Écrire des tests unitaires sur l'authentification, les droits et la validation des entrées.")
@@ -131,10 +131,10 @@ async def security_integration_tests(ctx: Context) -> Outcome:
 
 @check("repo.precommit_security", Depends.COMMIT, "Ajouter gitleaks ou detect-secrets à .pre-commit-config.yaml.")
 async def precommit_security(ctx: Context) -> Outcome:
-    tree = await ctx.tree()
-    if tree is None:
-        return Outcome.unknown("arborescence illisible")
-    if PRECOMMIT not in tree[0]:
+    present = await ctx.has(PRECOMMIT)
+    if present is None:
+        return Outcome.unknown("fichiers du dépôt illisibles")
+    if not present:
         return Outcome.fail("aucun .pre-commit-config.yaml")
     text = (await ctx.files([PRECOMMIT])).get(PRECOMMIT, "")
     hooks = sorted({m.lower() for m in SECURITY_HOOKS.findall(text)})
@@ -143,16 +143,15 @@ async def precommit_security(ctx: Context) -> Outcome:
 
 @check("repo.gitignore", Depends.COMMIT, "Ajouter un .gitignore à la racine du dépôt.")
 async def gitignore(ctx: Context) -> Outcome:
-    tree = await ctx.tree()
-    if tree is None:
-        return Outcome.unknown("arborescence illisible")
-    return Outcome.ok(".gitignore présent") if ".gitignore" in tree[0] else Outcome.fail("aucun .gitignore à la racine")
+    present = await ctx.has(".gitignore")
+    if present is None:
+        return Outcome.unknown("fichiers du dépôt illisibles")
+    return Outcome.ok(".gitignore présent") if present else Outcome.fail("aucun .gitignore à la racine")
 
 
 @check("repo.precommit_lint", Depends.COMMIT, "Ajouter un .pre-commit-config.yaml avec un linter, ou un .editorconfig.")
 async def precommit_lint(ctx: Context) -> Outcome:
-    tree = await ctx.tree()
-    if tree is None:
-        return Outcome.unknown("arborescence illisible")
-    found = [f for f in (PRECOMMIT, ".editorconfig", "lefthook.yml", ".husky/pre-commit") if f in tree[0]]
+    if await ctx.has(PRECOMMIT) is None:
+        return Outcome.unknown("fichiers du dépôt illisibles")
+    found = [f for f in (PRECOMMIT, ".editorconfig", "lefthook.yml", ".husky/pre-commit") if await ctx.has(f)]
     return Outcome.ok("linting local configuré", files=found) if found else Outcome.fail("aucun linting local configuré")
