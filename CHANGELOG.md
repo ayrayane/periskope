@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 — 2026-11-13
 
 - Dependency-Track, read only (plan P1–P10 of the CVE follow-up doc): hourly read of DT's trees (one per environment, one per JAR delivery) with their bricks, components and findings; DT's findings replace GitLab's dependency and container ones (no double count), GitLab keeps SAST, secrets and DAST. Bricks without SBOM, deployed by tag, with components without purl, lapsed exceptions and stale CVE sources in « Travail à faire ». Views « Par version livrée » (with comparison), « Exceptions et VEX », « Fiche de suivi » of a CVE, deployed versions on the project page. Chart `dependencyTrack.*`. Migration 0010.
 - SSVC response (Immédiat, Hors cycle, Planifié, Différé) on every vulnerability; the correction deadline follows it (7, 30, 90 days, none). Settings `sla_immediate_days`, `sla_out_of_cycle_days`, `sla_scheduled_days` replace the four deadlines by priority; `exception_days`. API: `response` on findings, `by_response` and `sources` on the summary, `overdue` and `sla_hours` keyed by response.
