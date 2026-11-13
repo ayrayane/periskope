@@ -28,6 +28,7 @@ async def db(database_url):
         "INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch, sonar_key)"
         " VALUES ('gl', $1, $2, $3, 'group', 'main', replace($2, '/', '_'))",
         PROJECTS)
+    await pool.execute("UPDATE projects SET topics = CASE gitlab_id WHEN 7 THEN '{prod}'::text[] WHEN 8 THEN '{dev,python}' ELSE '{}' END")
     yield pool
     await pool.close()
 
@@ -124,6 +125,12 @@ def test_api_scope_and_launch_rules(client):
     summary = client.get("/api/v1/projects/summary").json()
     assert summary["total"] == len(paths) and isinstance(summary["dimensions"], dict)
     assert all(g["missing"] <= g["measured"] for g in summary["gaps"]) and len(summary["lowest"]) <= 3
+    # The environment is a GitLab topic (prod, test, dev); "none" is a project carrying none of them. The counts ignore the filter.
+    assert summary["envs"] == {"prod": 1, "test": 0, "dev": 1, "none": 0, "total": 2}
+    assert [p["path"] for p in client.get("/api/v1/projects?env=prod").json()["items"]] == ["team-a/app"]
+    dev = client.get("/api/v1/projects/summary?env=dev").json()
+    assert dev["total"] == 1 and dev["envs"]["prod"] == 1
+    assert client.get("/api/v1/projects?env=none").json()["items"] == [] and client.get("/api/v1/projects?env=staging").status_code == 422
     assert [i["slug"] for i in client.get("/api/v1/instances").json()] == ["gl"]
     client.who["v"] = Viewer(sub, "nobody")
     assert client.get("/api/v1/instances").json() == [] and client.get("/api/v1/groups").json() == []
@@ -171,7 +178,7 @@ async def test_sync_projects_applies_exclusions(db, tmp_path):
         return {"id": pid, "path_with_namespace": path, "namespace": {"full_path": ns, "kind": kind}, "default_branch": "main",
                 "archived": False, "empty_repo": False, "last_activity_at": "2026-10-27T10:00:00Z", **kw}
 
-    listing = [p(7, "team-a/app"), p(8, "team-a/sub/lib"), p(11, "team-a/old", archived=True), p(12, "team-a/empty", default_branch=None),
+    listing = [p(7, "team-a/app", topics=["Prod", "python"]), p(8, "team-a/sub/lib"), p(11, "team-a/old", archived=True), p(12, "team-a/empty", default_branch=None),
                p(13, "team-a/sandbox/try")]
     gl = GitLab("https://gitlab.test", tmp_path / "t", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=listing)))
     (tmp_path / "t").write_text("x")
@@ -179,6 +186,9 @@ async def test_sync_projects_applies_exclusions(db, tmp_path):
     result = await sync_projects(db, gl, instance)
     rows = {r["path"]: (r["enabled"], r["excluded_reason"]) for r in await db.fetch("SELECT path, enabled, excluded_reason FROM projects")}
     assert rows["team-a/app"] == (True, None)
+    # Topics are kept lower-cased: prod, test and dev tell the environment whatever their case in GitLab.
+    assert await db.fetchval("SELECT topics FROM projects WHERE path = 'team-a/app'") == ["prod", "python"]
+    assert await db.fetchval("SELECT topics FROM projects WHERE path = 'team-a/sub/lib'") == []
     assert rows["team-a/old"] == (False, "projet archivé")
     assert rows["team-a/empty"] == (False, "projet vide")
     assert rows["team-a/sandbox/try"] == (False, "namespace exclu")
@@ -239,7 +249,9 @@ def test_scope_api(client, db, tmp_path):
     assert [d["path"] for d in trend["declining"]] == ["team-a/app"] and trend["declining"][0]["before"] == 100
     assert client.get("/api/v1/projects/trend?instance=gl&days=60").json()["declining"] == []
     flat = client.get("/api/v1/projects/export.csv?instance=gl").text.lstrip("\ufeff").splitlines()
-    assert flat[0].startswith("instance;groupe;projet") and {line.split(";")[2] for line in flat[1:]} == {"team-a/app", "team-a/sub/lib"}
+    assert flat[0].startswith("instance;groupe;projet;environnement") and {tuple(line.split(";")[2:4]) for line in flat[1:]} == {
+        ("team-a/app", "prod"), ("team-a/sub/lib", "dev")}
+    assert client.get("/api/v1/projects/export.csv?instance=gl&env=dev").text.count("\n") == 2
     detail = client.get("/api/v1/projects/export.csv?instance=gl&detail=true")
     assert "attachment" in detail.headers["content-disposition"] and "Version control" in detail.text
     client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "nobody")
@@ -426,16 +438,24 @@ def test_other_team_reaches_nothing(client, db, tmp_path):
     vulns = client.get("/api/v1/vulnerabilities").json()
     assert vulns["measured"] == 1 and [(v["key"], v["severity"], v["projects"]) for v in vulns["items"]] == [("CVE-2021-44228", "critical", 1), ("Weak hash", "low", 1)]
     assert [v["key"] for v in client.get("/api/v1/vulnerabilities?q=log4").json()["items"]] == ["CVE-2021-44228"]
-    # Log4Shell, open since 2021, is past the 24 h deadline of a critical; the low one, detected later, is not.
-    assert [(v["key"], v["overdue"]) for v in vulns["items"]] == [("CVE-2021-44228", 1), ("Weak hash", 0)]
-    assert summary["vulns"]["overdue"] == {"critical": 1, "low": 0} and summary["vulns"]["dated"] == 2
+    # Log4Shell, open since 2021, critical in a project without environment (counted as prod): Hors cycle, 30 days, long past.
+    # The low one is Planifié (90 days) and detected later: on time.
+    assert [(v["key"], v["response"], v["overdue"]) for v in vulns["items"]] == [("CVE-2021-44228", "out_of_cycle", 1), ("Weak hash", "scheduled", 0)]
+    assert summary["vulns"]["overdue"] == {"immediate": 0, "out_of_cycle": 1, "scheduled": 0} and summary["vulns"]["dated"] == 2
     assert client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()[0]["overdue"] is True
+    by_project = client.get("/api/v1/vulnerabilities/by-project").json()
+    assert by_project["next_offset"] is None and [(r["path"], r["total"], r["overdue"], r["by_priority"]) for r in by_project["items"]] == [
+        ("team-ab/other", 2, 1, {"critical": 1, "high": 0, "medium": 0, "low": 1})]
+    assert client.get("/api/v1/vulnerabilities/by-project?q=nope").json()["items"] == []
     assert [(b["branch"], b["last_status"]) for b in client.get("/api/v1/projects/gl/team-ab/other/branch-scores").json()] == [("main", "succeeded")]
     assert client.get("/api/v1/projects/gl/team-a/app/branch-scores").status_code == 404
     assert [r["path"] for r in client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()] == ["team-ab/other"]
     client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
     assert client.get("/api/v1/projects/summary").json()["vulns"]["critical"] == 2
     assert [r["path"] for r in client.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()] == ["team-a/app", "team-ab/other"]
+    page = client.get("/api/v1/vulnerabilities/by-project?limit=1").json()
+    assert len(page["items"]) == 1 and page["next_offset"] == 1
+    assert len(client.get("/api/v1/vulnerabilities/by-project?offset=1&limit=1").json()["items"]) == 1
     assert {k: v for k, v in client.get("/api/v1/vulnerabilities?instance=gl&namespace=teamxa").json().items() if k != "sla_hours"} == {"measured": 0, "items": []}
     assert client.get("/api/v1/projects/summary?instance=gl&namespace=teamxa").json()["vulns"] is None  # never measured: unknown, not 0
     client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "bob", namespaces=frozenset({("gl", "team-ab")}))
@@ -533,8 +553,11 @@ def test_exploitation_feeds_set_priority_and_deadline(client, database_url, monk
     assert items["CVE-2023-0003"]["priority"] == "medium" and items["CVE-2023-0003"]["epss"] == pytest.approx(0.4)  # low, EPSS 40 %: one up
     assert list(items) == ["CVE-2023-0001", "CVE-2023-0002", "CVE-2023-0003"]  # by priority
     summary = client.get("/api/v1/projects/summary?instance=gl&namespace=feeds").json()
-    assert summary["vulns"]["kev"] == 1 and summary["vulns"]["by_priority"] == {"critical": 1, "high": 1, "medium": 1}
-    assert summary["vulns"]["overdue"] == {"critical": 1, "high": 0, "medium": 1}
+    assert summary["vulns"]["kev"] == 1 and summary["vulns"]["by_priority"] == {"critical": 1, "high": 1, "medium": 1, "low": 0}
+    # SSVC in a project counted as prod: exploited → Immédiat (7 days, long past); critical unlikely → Hors cycle (30 days, 8 days old);
+    # low but EPSS 40 % → Hors cycle, open since January.
+    assert [items[k]["response"] for k in items] == ["immediate", "out_of_cycle", "out_of_cycle"]
+    assert summary["vulns"]["overdue"] == {"immediate": 1, "out_of_cycle": 1, "scheduled": 0}
     assert summary["feeds"]["kev"]["rows"] == 1 and summary["feeds"]["kev"]["error"] == "JSONDecodeError"
     assert "nexus.internal" not in str(summary["feeds"])  # the internal address is never shown to users
     assert summary["feeds"]["epss"]["rows"] == 3 and summary["feeds"]["epss"]["published"].startswith("2026-11-08")

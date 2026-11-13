@@ -42,15 +42,17 @@ async def sync_projects(db: asyncpg.Pool, gl: GitLab, instance: Instance) -> dic
             seen.append(p["id"])
             rows.append((instance.slug, p["id"], p["path_with_namespace"], p["namespace"]["full_path"], p["namespace"]["kind"],
                          p.get("default_branch"), bool(p.get("archived")), exclusion(p, instance.excluded_namespaces),
-                         p["path_with_namespace"].replace("/", "_"), _ts(p.get("last_activity_at"))))
+                         p["path_with_namespace"].replace("/", "_"), _ts(p.get("last_activity_at")),
+                         [t.lower() for t in p.get("topics") or []]))
     async with db.acquire() as conn, conn.transaction():
         await conn.executemany(
             """INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch, archived,
-                                     excluded_reason, enabled, sonar_key, last_activity_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text, $8::text IS NULL, $9, $10)
+                                     excluded_reason, enabled, sonar_key, last_activity_at, topics)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text, $8::text IS NULL, $9, $10, $11)
                ON CONFLICT (instance, gitlab_id) DO UPDATE SET
                  path = excluded.path, namespace_path = excluded.namespace_path, namespace_kind = excluded.namespace_kind,
                  default_branch = excluded.default_branch, archived = excluded.archived, last_activity_at = excluded.last_activity_at,
+                 topics = excluded.topics,
                  -- what was set by hand survives the sync
                  excluded_reason = CASE WHEN projects.reinstated THEN NULL ELSE excluded.excluded_reason END,
                  enabled = projects.reinstated OR excluded.excluded_reason IS NULL,

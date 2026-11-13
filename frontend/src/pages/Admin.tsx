@@ -109,11 +109,11 @@ const FIELDS: { key: string; label: string; type: "time" | "number"; help: strin
   { key: "evidence_days", label: "Conservation des preuves brutes (jours)", type: "number", help: "1 à 90", max: 90 },
   { key: "branch_run_days", label: "Conservation des analyses de branche (jours)", type: "number", help: "1 à 365", max: 365 },
   { key: "alert_drop", label: "Alerte si le score baisse d'au moins (points)", type: "number", help: "1 à 100 ; envoi au webhook d'alerte s'il est configuré", max: 100 },
-  { key: "sla_critical_hours", label: "Délai de correction d'une vulnérabilité critique (heures)", type: "number", help: "1 à 720 ; compté depuis la première détection", max: 720 },
-  { key: "sla_high_days", label: "Délai de correction d'une vulnérabilité haute (jours)", type: "number", help: "1 à 365", max: 365 },
-  { key: "sla_medium_days", label: "Délai de correction d'une vulnérabilité moyenne (jours)", type: "number", help: "1 à 365", max: 365 },
-  { key: "epss_high_pct", label: "EPSS élevé à partir de (%)", type: "number", help: "1 à 100 ; au-delà, la priorité monte d'un niveau", max: 100 },
-  { key: "sla_low_days", label: "Délai de correction d'une vulnérabilité basse (jours)", type: "number", help: "1 à 730", max: 730 },
+  { key: "sla_immediate_days", label: "Délai de correction, réponse Immédiat (jours)", type: "number", help: "1 à 90 ; compté depuis la première détection", max: 90 },
+  { key: "sla_out_of_cycle_days", label: "Délai de correction, réponse Hors cycle (jours)", type: "number", help: "1 à 365", max: 365 },
+  { key: "sla_scheduled_days", label: "Délai de correction, réponse Planifié (jours)", type: "number", help: "1 à 730 ; Différé n'a pas de délai", max: 730 },
+  { key: "epss_high_pct", label: "EPSS élevé à partir de (%)", type: "number", help: "1 à 100 ; au-delà, l'exploitation est jugée probable", max: 100 },
+  { key: "exception_days", label: "Durée d'une exception sans échéance écrite (jours)", type: "number", help: "1 à 365 ; au-delà, elle apparaît comme expirée", max: 365 },
 ];
 
 function SettingsForm() {

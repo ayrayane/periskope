@@ -27,6 +27,9 @@ spec:
             {{- if .Values.alerts.secret }}
             - { name: alerts, mountPath: /var/run/secrets/periskope/periskope-alerts, readOnly: true }
             {{- end }}
+            {{- if .Values.dependencyTrack.url }}
+            - { name: dtrack, mountPath: /var/run/secrets/periskope/periskope-dtrack, readOnly: true }
+            {{- end }}
       volumes:
         {{- include "periskope.volumes" . | nindent 8 }}
         {{- range .Values.instances }}
@@ -35,6 +38,10 @@ spec:
         {{- if .Values.alerts.secret }}
         # Key `url`: the Mattermost (or any JSON) incoming webhook. A URL with a token in it is a secret, never a value.
         - { name: alerts, secret: { secretName: {{ .Values.alerts.secret }} } }
+        {{- end }}
+        {{- if .Values.dependencyTrack.url }}
+        # Key `apiKey`: a DT API key whose team has VIEW_PORTFOLIO and VIEW_VULNERABILITY only (Periskope never writes to DT).
+        - { name: dtrack, secret: { secretName: {{ .Values.dependencyTrack.apiKeySecret }} } }
         {{- end }}
 ---
 apiVersion: v1

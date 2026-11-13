@@ -30,6 +30,9 @@ env:
   - { name: PERISKOPE_KEV_URL, value: {{ .Values.vulnFeeds.kevUrl | quote }} }
   - { name: PERISKOPE_EPSS_URL, value: {{ .Values.vulnFeeds.epssUrl | quote }} }
   - { name: PERISKOPE_FEEDS_PROXY, value: {{ .Values.vulnFeeds.proxy | quote }} }
+  - { name: PERISKOPE_DT_URL, value: {{ .Values.dependencyTrack.url | quote }} }
+  - { name: PERISKOPE_DT_INSTANCE, value: {{ .Values.dependencyTrack.instance | default (first .Values.instances).slug | quote }} }
+  - { name: PERISKOPE_DT_SOURCES, value: {{ .Values.dependencyTrack.sources | quote }} }
   {{- if .Values.oidc.caConfigMap }}
   - { name: PERISKOPE_OIDC_CA_FILE, value: /etc/periskope/ca/ca.crt }
   - { name: SSL_CERT_FILE, value: /etc/periskope/ca/ca.crt }

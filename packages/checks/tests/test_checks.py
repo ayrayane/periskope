@@ -215,3 +215,10 @@ async def test_client_reports_every_status_for_metrics(tmp_path):
     seen: list[int] = []
     gl = GitLab("https://gitlab.test", token, transport=httpx.MockTransport(lambda req: next(replies)), on_response=seen.append)
     assert (await gl.get("/api/v4/x")) == {"ok": True} and seen == [429, 200]
+
+
+def test_security_referents_from_codeowners():
+    """The critical-vulnerability alerts name the handles of the security lines only, never the whole CODEOWNERS."""
+    from periskope_checks.repo_checks import security_lines
+    text = "* @everyone\n[Security]\n/auth/ @alice @appsec-team\n[Docs]\n/docs/ @bob\nSECURITY.md @carol\n"
+    assert security_lines(text) == ["[Security]", "/auth/ @alice @appsec-team", "SECURITY.md @carol"]

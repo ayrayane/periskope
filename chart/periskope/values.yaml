@@ -21,7 +21,10 @@ image:
   repository: registry.example.com/periskope/periskope
   tag: ""                         # defaults to the chart appVersion
   frontend: registry.example.com/periskope/periskope/frontend
-  pullSecret: ""
+  # Third-party images: point them at the internal mirror (Harbor, Nexus) on a network without Internet.
+  valkey: docker.io/valkey/valkey:8.0-alpine
+  postgres: ghcr.io/cloudnative-pg/postgresql:16
+  pullSecret: ""                  # also used for valkey and postgres
 
 host: periskope.example.com
 # Score-drop alerts: name of a Secret holding the webhook in key `url` (Mattermost incoming webhook or any JSON endpoint). Empty: no alerts.
@@ -56,6 +59,15 @@ oidc:
   # nothing), admin. Unmapped roles named viewer/auditor/admin or periskope-<right> are taken as is.
   # Example for an LDAP-backed workspace: { manager: auditor, user: viewer }
   roleMap: {}
+
+# Dependency-Track, read only (hourly): the trees « CMS · prod|test|dev » the GitOps job builds and the JAR deliveries.
+# Each brick is named in DT by its GitLab path (cms/brique-a), or by a last path segment unique in `instance`.
+# With DT, dependency and image vulnerabilities come from DT alone; GitLab keeps SAST, secrets and DAST.
+dependencyTrack:
+  url: ""                          # e.g. https://dtrack.internal (the API is under /api)
+  apiKeySecret: periskope-dtrack   # Secret with key apiKey (team permissions VIEW_PORTFOLIO, VIEW_VULNERABILITY)
+  instance: ""                     # GitLab instance slug the brick names refer to; default the first instance
+  sources: nvd,github,osv          # DT mirrors whose freshness is watched (older than 2 days: alert)
 
 # Periskope admins by Keycloak login, whatever their Keycloak roles; usually kept in the deployment repository (admins.yaml).
 # Logins must be unique and fixed (directory accounts, no self-registration): a login listed here is trusted as is.

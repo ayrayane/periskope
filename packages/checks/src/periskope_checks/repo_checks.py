@@ -91,8 +91,21 @@ async def security_champion(ctx: Context) -> Outcome:
         return Outcome.fail("aucun fichier CODEOWNERS")
     text = "\n".join((await ctx.files(owners)).values())
     if re.search(r"secur|sécu|appsec|champion|SECURITY\.md", text, re.IGNORECASE):
-        return Outcome.ok("référent sécurité désigné dans CODEOWNERS")
+        # The handles of the security lines (or of the [Security] section): the critical-vulnerability alerts name them.
+        handles = sorted(set(re.findall(r"@[\w.\-/]+", "\n".join(security_lines(text)))))
+        return Outcome.ok(f"référent sécurité désigné dans CODEOWNERS{' : ' + ', '.join(handles[:5]) if handles else ''}", referents=handles)
     return Outcome.fail("CODEOWNERS sans référent sécurité")
+
+
+def security_lines(text: str) -> list[str]:
+    """The CODEOWNERS lines about security: those of a [Security…] section, and any line naming security itself."""
+    out, section = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("["):
+            section = bool(re.search(r"secur|sécu|appsec", line, re.IGNORECASE))
+        if section or re.search(r"secur|sécu|appsec|champion|SECURITY\.md", line, re.IGNORECASE):
+            out.append(line)
+    return out
 
 
 async def test_files(ctx: Context, kind: str) -> Outcome:

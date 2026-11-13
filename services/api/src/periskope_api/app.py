@@ -27,9 +27,11 @@ from periskope_core.settings import env, queue
 from periskope_db import Viewer, connect, runs
 from periskope_db import scope as scope_db
 from periskope_db import settings as hot
+from periskope_db.vulns import EPSS, FINDINGS, KEV, RESPONSES, overdue, rules
 from pydantic import BaseModel, Field
 
 from periskope_api import admin as admin_routes
+from periskope_api import dtrack as dt_routes
 from periskope_api import fixit as fixit_routes
 from periskope_api.auth import Settings, Verifier, viewer
 
@@ -106,8 +108,8 @@ async def project_row(me: Viewer, instance: str, path: str) -> dict:
     """A project the viewer may see; anything else is 404, since existence itself is information."""
     where, params = me.where("p", 3)
     row = await state["db"].fetchrow(
-        f"SELECT p.*, s.score, s.coverage, s.last_run_id, s.last_success_at, s.last_error, s.by_dimension, s.statuses, s.vulns"
-        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE p.instance = $1 AND p.path = $2 AND {where}",
+        f"SELECT p.*, s.score, s.coverage, s.last_run_id, s.last_success_at, s.last_error, s.by_dimension, s.statuses, s.vulns, s.dt"
+        f" FROM projects p LEFT JOIN project_status s ON s.project_id = p.id WHERE p.instance = $1 AND p.path = $2 AND {where}",
         instance, path, *params)
     if row is None or (not row["enabled"] and not me.admin):
         raise HTTPException(404, "projet introuvable")
@@ -143,10 +145,22 @@ async def list_instances(me: Me) -> list[dict]:
 SORTS = {"score": "s.score", "name": "p.path", "last_run": "s.last_success_at"}
 
 
-def scoped(me: Viewer, instance: str | None, namespace: str | None) -> tuple[str, list]:
-    """The viewer's enabled projects, narrowed to one GitLab instance and one group with its subgroups."""
+# A project's environment is a GitLab topic it carries (any case); "none" stands for the projects carrying none of them.
+ENVS = ("prod", "test", "dev")
+# Read from ?env=; the argument is named environment, `env` being the settings reader.
+Env = Annotated[Literal["prod", "test", "dev", "none"] | None, Query(alias="env")]
+NO_ENV = "NOT (p.topics && ARRAY[" + ", ".join(f"'{e}'" for e in ENVS) + "])"
+
+
+def scoped(me: Viewer, instance: str | None, namespace: str | None, environment: str | None = None) -> tuple[str, list]:
+    """The viewer's enabled projects, narrowed to one GitLab instance, one group with its subgroups, and one environment."""
     where, params = me.where("p", 1)
     conds = [where, "p.enabled"]
+    if environment == "none":
+        conds.append(NO_ENV)
+    elif environment:
+        params.append(environment)
+        conds.append(f"${len(params)} = ANY(p.topics)")
     if instance:
         params.append(instance)
         conds.append(f"p.instance = ${len(params)}")
@@ -172,6 +186,7 @@ async def list_projects(
     me: Me,
     instance: str | None = None,
     namespace: str | None = None,
+    environment: Env = None,
     q: str | None = Query(None, max_length=100),
     below_target: bool = False,
     failed: bool = False,
@@ -186,7 +201,7 @@ async def list_projects(
     limit: int = Query(50, ge=1, le=200),
 ) -> dict:
     """The portfolio reads project_state, never runs: it pages on an index."""
-    where, params = scoped(me, instance, namespace)
+    where, params = scoped(me, instance, namespace, environment)
     conds = [where]
     def arg(value: Any) -> str:
         params.append(value)
@@ -226,9 +241,9 @@ async def list_projects(
     # The page first, then the latest run of its rows only: never one lookup per project of the whole portfolio.
     rows = await state["db"].fetch(
         f"SELECT page.*, (SELECT status FROM runs WHERE project_id = page.id AND branch = page.default_branch ORDER BY created_at DESC LIMIT 1)"
-        f" AS last_status FROM (SELECT p.id, p.instance, p.path, p.namespace_path, p.default_branch, p.target_level, s.score, s.coverage, s.vulns,"
+        f" AS last_status FROM (SELECT p.id, p.instance, p.path, p.namespace_path, p.default_branch, p.target_level, p.topics, s.score, s.coverage, s.vulns,"
         f" s.last_success_at, s.last_error, s.last_run_id, {practices(len(params) + 1)} AS practices, {COVERAGE} AS vuln_coverage"
-        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id"
+        f" FROM projects p LEFT JOIN project_status s ON s.project_id = p.id"
         f" WHERE {' AND '.join(conds)} ORDER BY {order} LIMIT {limit + 1}) page", *params, NAMES, LEVELS)
     items = [dict(r) for r in rows[:limit]]
     nxt = None
@@ -268,14 +283,22 @@ def practices(n: int) -> str:
 
 # Can the vulnerability count of a project be trusted? Zero means nothing without an SBOM (CycloneDX report) for GitLab to match CVEs against.
 SBOM = "(SELECT r.results->'gitlab.sbom_artifact'->>'status' FROM runs r WHERE r.id = s.last_run_id)"
-COVERAGE = (f"CASE WHEN s.last_run_id IS NULL THEN 'unmeasured' WHEN {' + '.join(vuln(k) for k in SEVERITIES)} > 0 THEN 'reporting'"
-            f" WHEN {SBOM} = 'fail' THEN 'blind' WHEN {SBOM} = 'pass' AND s.vulns IS NOT NULL THEN 'clean' ELSE 'unmeasured' END")
+# With Dependency-Track, a project whose running bricks all carry an SBOM is measured by DT whatever its pipeline publishes.
+DT_SBOM = "(s.dt IS NOT NULL AND NOT jsonb_path_exists(s.dt, '$[*] ? (@.sbom == false)'))"
+COVERAGE = (f"CASE WHEN s.last_run_id IS NULL AND s.dt IS NULL THEN 'unmeasured' WHEN {' + '.join(vuln(k) for k in SEVERITIES)} > 0 THEN 'reporting'"
+            f" WHEN {DT_SBOM} THEN 'clean' WHEN {SBOM} = 'fail' OR s.dt IS NOT NULL THEN 'blind'"
+            f" WHEN {SBOM} = 'pass' AND s.vulns IS NOT NULL THEN 'clean' ELSE 'unmeasured' END")
 
 
 @api.get("/projects/summary")
-async def projects_summary(me: Me, instance: str | None = None, namespace: str | None = None) -> dict:
-    """The portfolio's headline figures over the viewer's scope (or one instance or group of it), with the same definitions as the list filters."""
-    where, params = scoped(me, instance, namespace)
+async def projects_summary(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None) -> dict:
+    """The portfolio's headline figures over the viewer's scope (or one instance, group or environment of it), with the same definitions as the list filters."""
+    where, params = scoped(me, instance, namespace, environment)
+    # Projects per environment, whatever the environment asked for: the figures of the selector that switches between them.
+    every, every_params = scoped(me, instance, namespace)
+    envs = await state["db"].fetchrow(
+        f"SELECT {', '.join(f"count(*) FILTER (WHERE '{e}' = ANY(p.topics)) AS {e}" for e in ENVS)}, count(*) FILTER (WHERE {NO_ENV}) AS none,"
+        f" count(*) AS total FROM projects p WHERE {every}", *every_params)
     row = await state["db"].fetchrow(
         "SELECT count(*) AS total, count(s.last_run_id) AS analysed, avg(s.score) AS score, avg(s.coverage) AS coverage,"
         " count(*) FILTER (WHERE s.score < 100) AS below_target, count(*) FILTER (WHERE s.last_error IS NOT NULL) AS failed,"
@@ -285,10 +308,10 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
         f" count(*) FILTER (WHERE s.score > {BEFORE} + 1) AS improving, count(*) FILTER (WHERE s.score < {BEFORE} - 1) AS declining,"
         f" count({BEFORE}) AS compared,"
         f" count(s.vulns) AS vulns_measured, {', '.join(f'sum({vuln(k)}) AS vulns_{k}' for k in SEVERITIES)}"
-        f" FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE {where}", *params)
+        f" FROM projects p LEFT JOIN project_status s ON s.project_id = p.id WHERE {where}", *params)
     # The open vulnerabilities of the scope, and the projects most exposed (critical first, then high).
     exposed = await state["db"].fetch(
-        f"SELECT p.instance, p.path, s.vulns FROM projects p JOIN project_state s ON s.project_id = p.id"
+        f"SELECT p.instance, p.path, s.vulns FROM projects p JOIN project_status s ON s.project_id = p.id"
         f" WHERE {where} AND ({vuln('critical')} + {vuln('high')}) > 0 ORDER BY {vuln('critical')} DESC, {vuln('high')} DESC, p.path LIMIT 5", *params)
     row = dict(row)
     measured = row.pop("vulns_measured")
@@ -296,7 +319,7 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
     dims = await state["db"].fetch(
         "SELECT d.key AS dimension, avg(d.value::text::float) AS score FROM projects p JOIN project_state s ON s.project_id = p.id,"
         f" jsonb_each(s.by_dimension) d WHERE {where} AND jsonb_typeof(d.value) = 'number' GROUP BY d.key ORDER BY d.key", *params)
-    # Most missing practices across the scope, each counted only up to its project's target level.
+    # Every practice missing somewhere in the scope, most missing first, each counted only up to its project's target level.
     n, lv = len(params) + 1, len(params) + 2
     gaps = await state["db"].fetch(
         "SELECT d.key AS activity, max(lv.level) AS level,"
@@ -305,22 +328,24 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
         f" FROM projects p JOIN project_state s ON s.project_id = p.id, jsonb_each(s.statuses) d, unnest(${n}::text[], ${lv}::int[]) AS lv(name, level)"
         f" WHERE {where} AND lv.name = d.key AND lv.level <= p.target_level"
         " GROUP BY d.key HAVING count(*) FILTER (WHERE d.value->>'status' IN ('not_implemented', 'partial')) > 0"
-        " ORDER BY missing DESC, level, d.key LIMIT 5", *params, NAMES, LEVELS)
+        " ORDER BY missing DESC, level, d.key", *params, NAMES, LEVELS)
     n = len(params) + 1
     avg = await state["db"].fetchrow(
         f"SELECT count(x) AS projects, {', '.join(f'avg((x->>{k!r})::float) AS {k}' for k in ('done', 'partial', 'missing', 'unknown', 'counted'))}"
         f" FROM (SELECT {practices(n)} AS x FROM projects p JOIN project_state s ON s.project_id = p.id WHERE {where}) t", *params, NAMES, LEVELS)
-    priority, deadline, hours = await sla()
+    r = await rules(state["db"])
     late = await state["db"].fetch(
-        f"SELECT {priority} AS priority, count(*) AS n, count(*) FILTER (WHERE {overdue(deadline)}) AS overdue, count(f->>'detected_at') AS dated,"
-        f" count(k.cve) AS kev FROM projects p JOIN project_state s ON s.project_id = p.id, {FINDINGS} WHERE {where} GROUP BY 1", *params)
-    feeds = {r["name"]: dict(r) for r in await state["db"].fetch("SELECT name, fetched_at, rows, published, error FROM vuln_feeds")}
+        f"SELECT {r.priority} AS priority, {r.response} AS response, count(*) AS n, count(*) FILTER (WHERE {overdue(r.deadline)}) AS overdue,"
+        f" count(f->>'detected_at') AS dated, count(*) FILTER (WHERE {KEV}) AS kev"
+        f" FROM projects p JOIN project_status s ON s.project_id = p.id, {FINDINGS} WHERE {where} GROUP BY 1, 2", *params)
+    feeds = {r_["name"]: dict(r_) for r_ in await state["db"].fetch("SELECT name, fetched_at, rows, published, error FROM vuln_feeds")}
+    sources = [dict(x) for x in await state["db"].fetch("SELECT name, completed_at, error, via FROM vuln_sources ORDER BY via DESC, name")]
     cover = await state["db"].fetch(
-        f"SELECT {COVERAGE} AS bucket, count(*) AS n FROM projects p LEFT JOIN project_state s ON s.project_id = p.id WHERE {where} GROUP BY 1", *params)
+        f"SELECT {COVERAGE} AS bucket, count(*) AS n FROM projects p LEFT JOIN project_status s ON s.project_id = p.id WHERE {where} GROUP BY 1", *params)
     lowest = await state["db"].fetch(
         "SELECT p.instance, p.path, s.score, s.coverage, s.last_success_at FROM projects p JOIN project_state s ON s.project_id = p.id"
         f" WHERE {where} AND s.score IS NOT NULL ORDER BY s.score, p.path LIMIT 3", *params)
-    return {**row, "dimensions": {d["dimension"]: d["score"] for d in dims},
+    return {**row, "envs": dict(envs), "dimensions": {d["dimension"]: d["score"] for d in dims},
             "gaps": [dict(g) for g in gaps], "lowest": [dict(r) for r in lowest],
             # Average practices per analysed project, by status: what the mean score stands for.
             "practices": dict(avg) if avg["projects"] else None,
@@ -328,11 +353,19 @@ async def projects_summary(me: Me, instance: str | None = None, namespace: str |
             # None when no project of the scope is measured (GitLab without Ultimate): unknown, not zero.
             "vulns": {**vulns, "total": sum(vulns.values()), "projects": measured, "exposed": [dict(e) for e in exposed],
                       # Findings (one CVE in one project) past their correction deadline, and how many carry a detection date at all.
-                      "sla_hours": hours, "overdue": {r["priority"]: r["overdue"] for r in late if r["priority"] in hours},
-                      "by_priority": {r["priority"]: r["n"] for r in late if r["priority"] in hours},
-                      "dated": sum(r["dated"] for r in late if r["priority"] in hours), "kev": sum(r["kev"] for r in late)} if measured else None,
+                      # By SSVC response (its deadline) and by priority; « deferred » has no deadline.
+                      "sla_hours": r.hours, "overdue": {k: sum(x["overdue"] for x in late if x["response"] == k) for k in r.hours},
+                      "by_response": {k: sum(x["n"] for x in late if x["response"] == k) for k in RESPONSES},
+                      "by_priority": {k: sum(x["n"] for x in late if x["priority"] == k) for k in ("critical", "high", "medium", "low")},
+                      "dated": sum(x["dated"] for x in late if x["response"] in r.hours), "kev": sum(x["kev"] for x in late)} if measured else None,
             # KEV and EPSS: configured or not, and when last read from the mirror.
-            "feeds": {n: {"configured": bool(env(v, "")), **feeds.get(n, {})} for n, v in (("kev", "KEV_URL"), ("epss", "EPSS_URL"))}}
+            "feeds": {n: {"configured": bool(env(v, "")), **feeds.get(n, {})} for n, v in (("kev", "KEV_URL"), ("epss", "EPSS_URL"))},
+            # Every CVE source with its last completed update (Periskope's feeds, DT's mirrors): older than 2 days, new CVEs go unseen.
+            "sources": sources}
+
+
+def respond_rank(response: str) -> str:
+    return f"array_position(ARRAY{list(RESPONSES)}, {response})"
 
 
 def rank(severity: str) -> str:
@@ -342,70 +375,70 @@ def rank(severity: str) -> str:
 RANK = rank("f->>'severity'")
 
 
-# A finding f with the exploitation feeds of its CVE: k (KEV catalogue) and e (EPSS score), both empty without a mirror.
-FINDINGS = ("jsonb_array_elements(s.vuln_findings) f LEFT JOIN vuln_kev k ON k.cve = f->>'key'"
-            " LEFT JOIN vuln_epss e ON e.cve = f->>'key'")
-
-
-async def sla() -> tuple[str, str, dict[str, float]]:
-    """SQL for the priority of finding f and for its deadline (hours), and the deadlines themselves.
-    Priority: exploited (KEV) is critical; a likely exploitation (EPSS at or above the threshold) raises the severity one level;
-    an unlikely one brings a critical down to high; without EPSS, the severity. Info and unknown have no deadline."""
-    conf = await hot.load(state["db"])
-    hours = {"critical": conf.sla_critical_hours, "high": conf.sla_high_days * 24, "medium": conf.sla_medium_days * 24, "low": conf.sla_low_days * 24}
-    threshold = conf.epss_high_pct / 100
-    priority = ("(CASE WHEN k.cve IS NOT NULL THEN 'critical'"
-                f" WHEN e.score >= {threshold} THEN (CASE f->>'severity' WHEN 'medium' THEN 'high' WHEN 'low' THEN 'medium' ELSE 'critical' END)"
-                " WHEN e.score IS NOT NULL AND f->>'severity' = 'critical' THEN 'high' ELSE f->>'severity' END)")
-    return priority, f"CASE {priority} " + " ".join(f"WHEN '{k}' THEN {int(v)}" for k, v in hours.items()) + " END", hours
-
-
-def overdue(deadline: str) -> str:
-    """Open past its deadline; a finding stored before detection dates were read counts as neither late nor on time."""
-    return f"((f->>'detected_at')::timestamptz + make_interval(hours => {deadline}) < now())"
-
-
 @api.get("/vulnerabilities")
-async def list_vulnerabilities(me: Me, instance: str | None = None, namespace: str | None = None, q: str | None = Query(None, max_length=100)) -> dict:
+async def list_vulnerabilities(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None, q: str | None = Query(None, max_length=100)) -> dict:
     """Open vulnerabilities of the scope grouped by CVE (by title without one): worst severity and how many projects each touches."""
-    where, params = scoped(me, instance, namespace)
+    where, params = scoped(me, instance, namespace, environment)
     measured = await state["db"].fetchval(
-        f"SELECT count(s.vuln_findings) FROM projects p JOIN project_state s ON s.project_id = p.id WHERE {where}", *params)
+        f"SELECT count(s.vuln_findings) FROM projects p JOIN project_status s ON s.project_id = p.id WHERE {where}", *params)
     if q:
         params.append(q)
         where += f" AND (strpos(lower(f->>'key'), lower(${len(params)})) > 0 OR strpos(lower(f->>'title'), lower(${len(params)})) > 0)"
     # shortcut: the 1 000 most severe and widespread; a search narrows the rest.
-    priority, deadline, hours = await sla()
+    r = await rules(state["db"])
     rows = await state["db"].fetch(
         f"SELECT f->>'key' AS key, bool_or((f->>'cve')::boolean) AS cve, min(f->>'title') AS title, min({RANK}) AS rank, count(*) AS projects,"
-        f" min({rank(priority)}) AS prank, bool_or(k.cve IS NOT NULL) AS kev, max(e.score) AS epss, max(e.percentile) AS percentile,"
-        f" min((f->>'detected_at')::timestamptz) AS detected_at, count(*) FILTER (WHERE {overdue(deadline)}) AS overdue"
-        f" FROM projects p JOIN project_state s ON s.project_id = p.id, {FINDINGS} WHERE {where}"
-        " GROUP BY 1 ORDER BY prank, overdue DESC, rank, projects DESC, key LIMIT 1000", *params)
-    return {"measured": measured, "sla_hours": hours,
-            "items": [{**{k: r[k] for k in ("key", "cve", "title", "projects", "detected_at", "overdue", "kev", "epss", "percentile")},
-                       "severity": SEVERITIES[r["rank"] - 1], "priority": SEVERITIES[r["prank"] - 1]} for r in rows]}
+        f" min({rank(r.priority)}) AS prank, min({respond_rank(r.response)}) AS rrank, bool_or({KEV}) AS kev, max({EPSS}) AS epss, max(e.percentile) AS percentile,"
+        f" min((f->>'detected_at')::timestamptz) AS detected_at, count(*) FILTER (WHERE {overdue(r.deadline)}) AS overdue"
+        f" FROM projects p JOIN project_status s ON s.project_id = p.id, {FINDINGS} WHERE {where}"
+        " GROUP BY 1 ORDER BY rrank, prank, overdue DESC, rank, projects DESC, key LIMIT 1000", *params)
+    return {"measured": measured, "sla_hours": r.hours,
+            "items": [{**{k: x[k] for k in ("key", "cve", "title", "projects", "detected_at", "overdue", "kev", "epss", "percentile")},
+                       "severity": SEVERITIES[x["rank"] - 1], "priority": SEVERITIES[x["prank"] - 1], "response": RESPONSES[x["rrank"] - 1]} for x in rows]}
 
 
 @api.get("/vulnerabilities/projects")
-async def vulnerability_projects(me: Me, key: str = Query(..., max_length=300), instance: str | None = None, namespace: str | None = None) -> list[dict]:
+async def vulnerability_projects(me: Me, key: str = Query(..., max_length=300), instance: str | None = None, namespace: str | None = None, environment: Env = None) -> list[dict]:
     """The scope's projects where this CVE (or finding title) is open."""
-    where, params = scoped(me, instance, namespace)
+    where, params = scoped(me, instance, namespace, environment)
     params.append(key)
-    priority, deadline, _ = await sla()
+    r = await rules(state["db"])
     rows = await state["db"].fetch(
         f"SELECT p.instance, p.path, s.score, s.coverage, f->>'severity' AS severity, f->>'type' AS type, (f->>'detected_at')::timestamptz AS detected_at,"
-        f" {priority} AS priority, k.cve IS NOT NULL AS kev, e.score AS epss,"
-        f" coalesce({overdue(deadline)}, false) AS overdue FROM projects p JOIN project_state s ON s.project_id = p.id,"
+        f" {r.priority} AS priority, {r.response} AS response, {KEV} AS kev, {EPSS} AS epss, f->'envs' AS envs, f->'trees' AS trees, f->'components' AS components,"
+        f" coalesce({overdue(r.deadline)}, false) AS overdue FROM projects p JOIN project_status s ON s.project_id = p.id,"
         f" {FINDINGS} WHERE {where} AND f->>'key' = ${len(params)} ORDER BY {RANK}, detected_at, p.instance, p.path LIMIT 1000", *params)
     return [dict(r) for r in rows]
 
 
+@api.get("/vulnerabilities/by-project")
+async def vulnerabilities_by_project(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None, q: str | None = Query(None, max_length=100),
+                                     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200)) -> dict:
+    """The scope's projects with open vulnerabilities, most impacted first: counts by priority, past their deadline, exploited (KEV)."""
+    where, params = scoped(me, instance, namespace, environment)
+    if q:
+        params.append(q)
+        where += f" AND strpos(lower(p.path), lower(${len(params)})) > 0"
+    r = await rules(state["db"])
+    priority, deadline, hours = r.priority, r.deadline, {k: 0 for k in ("critical", "high", "medium", "low")}
+    by = lambda k: f"count(*) FILTER (WHERE {priority} = '{k}')"
+    rows = await state["db"].fetch(
+        f"SELECT p.instance, p.path, s.score, s.coverage, count(*) AS total, {', '.join(f'{by(k)} AS {k}' for k in hours)},"
+        f" count(*) FILTER (WHERE {overdue(deadline)}) AS overdue, count(*) FILTER (WHERE {KEV}) AS kev,"
+        f" count(*) FILTER (WHERE {r.response} = 'immediate') AS immediate, count(*) FILTER (WHERE {r.response} = 'out_of_cycle') AS out_of_cycle"
+        f" FROM projects p JOIN project_status s ON s.project_id = p.id, {FINDINGS} WHERE {where} GROUP BY p.id, s.score, s.coverage"
+        f" ORDER BY {', '.join(f'{k} DESC' for k in hours)}, overdue DESC, total DESC, p.instance, p.path OFFSET {offset} LIMIT {limit + 1}", *params)
+    items = [{"instance": r["instance"], "path": r["path"], "score": r["score"], "coverage": r["coverage"], "total": r["total"],
+              "overdue": r["overdue"], "kev": r["kev"], "by_priority": {k: r[k] for k in hours},
+              "by_response": {k: r[k] for k in ("immediate", "out_of_cycle")}} for r in rows[:limit]]
+    return {"items": items, "next_offset": offset + limit if len(rows) > limit else None}
+
+
 @api.get("/projects/trend")
-async def projects_trend(me: Me, instance: str | None = None, namespace: str | None = None,
+async def projects_trend(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None,
                          days: int = Query(30, ge=1, le=365), drop: float = Query(5, ge=0, le=100)) -> dict:
     """Monthly average score of the scope, and the projects whose score fell by more than `drop` points over `days` days."""
-    where, params = scoped(me, instance, namespace)
+    where, params = scoped(me, instance, namespace, environment)
     months = await state["db"].fetch(
         "SELECT h.month, avg(h.score) AS score, count(*) AS projects FROM history_monthly h JOIN projects p ON p.id = h.project_id"
         f" WHERE {where} AND h.score IS NOT NULL AND h.month > now() - interval '12 months' GROUP BY h.month ORDER BY h.month", *params)
@@ -420,9 +453,9 @@ async def projects_trend(me: Me, instance: str | None = None, namespace: str | N
 
 
 @api.get("/groups/heatmap")
-async def groups_heatmap(me: Me, instance: str | None = None, namespace: str | None = None) -> dict:
+async def groups_heatmap(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None) -> dict:
     """Average score per DSOMM dimension for each child of the scope: instances, then top groups, then subgroups."""
-    where, params = scoped(me, instance, namespace)
+    where, params = scoped(me, instance, namespace, environment)
     if namespace:
         params.append(namespace)
         ns = f"${len(params)}"
@@ -452,11 +485,11 @@ def cell(value: Any) -> str:
 
 
 @api.get("/projects/export.csv")
-async def export_csv(me: Me, instance: str | None = None, namespace: str | None = None, detail: bool = False) -> StreamingResponse:
+async def export_csv(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None, detail: bool = False) -> StreamingResponse:
     """The scope as a spreadsheet: one row per project, or with detail one row per project and practice with its evidence."""
-    where, params = scoped(me, instance, namespace)
-    sql = ("SELECT p.instance, p.namespace_path, p.path, p.target_level, s.score, s.coverage, s.last_success_at, s.last_error, s.statuses"
-           + (", r.results" if detail else "") + " FROM projects p LEFT JOIN project_state s ON s.project_id = p.id"
+    where, params = scoped(me, instance, namespace, environment)
+    sql = ("SELECT p.instance, p.namespace_path, p.path, p.target_level, p.topics, s.score, s.coverage, s.last_success_at, s.last_error, s.statuses"
+           + (", r.results" if detail else "") + " FROM projects p LEFT JOIN project_status s ON s.project_id = p.id"
            + (" LEFT JOIN runs r ON r.id = s.last_run_id" if detail else "") + f" WHERE {where} ORDER BY p.instance, p.path")
     by_activity: dict[str, list] = {}
     for c in CHECKS:
@@ -469,7 +502,7 @@ async def export_csv(me: Me, instance: str | None = None, namespace: str | None 
         if detail:
             w.writerow(["instance", "groupe", "projet", "dimension", "pratique", "niveau", "dans la cible", "statut", "preuves"])
         else:
-            w.writerow(["instance", "groupe", "projet", "niveau cible", "score", "couverture", "derniere reussite", "en echec",
+            w.writerow(["instance", "groupe", "projet", "environnement", "niveau cible", "score", "couverture", "derniere reussite", "en echec",
                         "en place", "partielles", "absentes", "indeterminees"])
         yield buf.getvalue()
         buf.seek(0)
@@ -482,7 +515,7 @@ async def export_csv(me: Me, instance: str | None = None, namespace: str | None 
                 if not detail:
                     counts = {k: sum(1 for name, v in statuses.items() if v.get("status") == k and ACTIVITIES[name].level <= r["target_level"])
                               for k in ("implemented", "partial", "not_implemented", "unknown")}
-                    w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], r["target_level"],
+                    w.writerow([cell(x) for x in (r["instance"], r["namespace_path"], r["path"], " ".join(e for e in ENVS if e in r["topics"]), r["target_level"],
                                 None if r["score"] is None else round(r["score"], 1), None if r["coverage"] is None else round(r["coverage"], 1),
                                 r["last_success_at"].isoformat() if r["last_success_at"] else None, r["last_error"],
                                 counts["implemented"], counts["partial"], counts["not_implemented"], counts["unknown"])])
@@ -497,7 +530,7 @@ async def export_csv(me: Me, instance: str | None = None, namespace: str | None 
                 buf.seek(0)
                 buf.truncate()
 
-    name = "periskope-" + "-".join(x for x in (instance, namespace, "detail" if detail else "projets") if x) + ".csv"
+    name = "periskope-" + "-".join(x for x in (instance, namespace, environment, "detail" if detail else "projets") if x) + ".csv"
     name = re.sub(r"[^A-Za-z0-9._-]", "_", name)  # query text never reaches the header as is
     return StreamingResponse(lines(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -825,4 +858,5 @@ async def delete_scope(target_id: str, me: Me, target: Literal["check", "activit
 # Before the API router: its /projects/{instance}/{path:path} would otherwise swallow .../fixes.
 app.include_router(fixit_routes.router(state, current, audit, project_row))
 app.include_router(api)
+app.include_router(dt_routes.router(state, current, scoped))
 app.include_router(admin_routes.router(state, current, audit))

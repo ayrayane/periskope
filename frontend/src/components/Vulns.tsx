@@ -73,3 +73,18 @@ export function Age({ since, overdue, deadline }: { since: string | null; overdu
     ? <span className="badge tone-fail age-late" title={deadline ? `Délai de correction : ${span(deadline)}` : undefined}>{age} · hors délai</span>
     : <span className="muted small" title={deadline ? `Délai de correction : ${span(deadline)}` : undefined}>{age}</span>;
 }
+
+// SSVC responses (D14), most urgent first, with what puts a vulnerability there and the tone of their badge.
+export const RESPONSES = [
+  ["immediate", "Immédiat", "exploitée (KEV) en prod, ou exploitation probable (EPSS) d'une faille automatisable ou critique en prod", "tone-fail"],
+  ["out_of_cycle", "Hors cycle", "exploitée hors prod, exploitation probable en prod, ou faille automatisable ou critique en prod", "tone-warn"],
+  ["scheduled", "Planifié", "exploitation probable hors prod, ou autre faille en prod (une version livrée compte comme prod)", "tone-info"],
+  ["deferred", "Différé", "faille non exploitée hors prod, ou sans sévérité : sans délai, à la prochaine maintenance", "tone-muted"],
+] as const;
+const RESPONSE = Object.fromEntries(RESPONSES.map(([k, label, why, tone]) => [k, { label, why, tone }]));
+
+/** The SSVC response that sets the deadline, as a badge with its word. */
+export function Response({ r }: { r?: string | null }) {
+  const x = r ? RESPONSE[r] : undefined;
+  return x ? <span className={`badge ${x.tone}`} title={x.why}>{x.label}</span> : <span className="muted small">—</span>;
+}

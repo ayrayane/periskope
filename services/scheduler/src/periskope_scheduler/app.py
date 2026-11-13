@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -15,11 +16,11 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from periskope_core.settings import env, instances, queue, secret
-from periskope_db import connect
+from periskope_db import connect, vulns
 from periskope_db import settings as hot
 from periskope_db.bootstrap import bootstrap
 
-from periskope_scheduler import feeds
+from periskope_scheduler import dtrack, feeds
 
 log = structlog.get_logger()
 TZ = ZoneInfo(env("TIMEZONE", "Europe/Paris"))
@@ -29,6 +30,9 @@ LOCK_KEY, LOCK_TTL_S = "scheduler:lock", 60
 TASKS = {"vuln_feeds": "feeds_at", "sync_projects": "sync_at", "catch_up": "catch_up_at", "rollup_history": "rollup_at"}
 SYSTEM_EVENTS = {"project_create", "project_rename", "project_transfer", "project_destroy"}
 ALERTS_EVERY_S = 300
+DT_EVERY_S = 3600
+# A vulnerability source older than this no longer reports new CVEs (P6).
+STALE = timedelta(days=2)
 
 state: dict = {}
 
@@ -106,7 +110,10 @@ async def cron_loop() -> None:
                 now = datetime.now(TZ)
                 # Read every loop: an admin's new hours apply without a restart.
                 conf = await hot.load(state["db"])
+                if dtrack.configured() and await redis.set(f"scheduler:dt:{int(now.timestamp() // DT_EVERY_S)}", 1, nx=True, ex=2 * DT_EVERY_S):
+                    await dt_sync()
                 if await redis.set(f"scheduler:alerts:{int(now.timestamp() // ALERTS_EVERY_S)}", 1, nx=True, ex=2 * ALERTS_EVERY_S):
+                    log.info("ledger", **await vulns.ledger(state["db"]))
                     await alerts()
                 for task, field in TASKS.items():
                     key = f"scheduler:done:{task}:{now.date()}"
@@ -125,6 +132,14 @@ async def cron_loop() -> None:
 
 async def vuln_feeds() -> None:
     await feeds.refresh(state["db"])
+
+
+async def dt_sync() -> None:
+    try:
+        await dtrack.sync(state["db"])
+    except Exception:
+        # DT down: yesterday's trees stay, and the sources age until the stale alert says so.
+        log.exception("dt_sync_failed")
 
 
 async def sync_projects() -> None:
@@ -189,35 +204,65 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+async def post(client: httpx.AsyncClient, url: str, kind: str, key: str, text: str, props: dict) -> None:
+    """One alert, once: recorded before it is sent, forgotten again if the webhook refuses it so the next pass retries."""
+    if await state["db"].fetchval("INSERT INTO alerts_sent (kind, key) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING 1", kind, key) is None:
+        return
+    try:
+        resp = await client.post(url, json={"username": "Periskope", "text": text, "props": {"kind": kind, **props}})
+        resp.raise_for_status()
+        log.info("alert_sent", kind=kind, key=key)
+    except httpx.HTTPError as e:
+        await state["db"].execute("DELETE FROM alerts_sent WHERE kind = $1 AND key = $2", kind, key)
+        log.warning("alert_failed", kind=kind, key=key, error=type(e).__name__)
+
+
+# The security referents CODEOWNERS names, as the last analysis of the project read them (repo.security_champion).
+REFERENTS = ("(SELECT r.results->'repo.security_champion'->>'message' FROM runs r JOIN project_state ps ON ps.last_run_id = r.id"
+             " WHERE ps.project_id = p.id)")
+
+
 async def alerts() -> None:
-    """Each score drop on a default branch, posted once to the alert webhook: Mattermost reads `text`, other tools read `props`."""
+    """Posted once each to the alert webhook (Mattermost reads `text`, other tools `props`): a score drop on a default branch,
+    a new vulnerability of critical priority (once per CVE and project, naming its referent), a CVE source older than 2 days."""
     url_file = secret("periskope-alerts") / "url"
     if not url_file.exists():
         return
     url = url_file.read_text().strip()
-    conf = await hot.load(state["db"])
-    rows = await state["db"].fetch(
+    db = state["db"]
+    conf = await hot.load(db)
+    base = env("PUBLIC_URL", "").rstrip("/")
+    drops = await db.fetch(
         "SELECT r.id, p.instance, p.path, r.score, prev.score AS before FROM runs r JOIN projects p ON p.id = r.project_id"
         " JOIN LATERAL (SELECT x.score FROM runs x WHERE x.project_id = r.project_id AND x.branch = r.branch AND x.status = 'succeeded'"
         " AND x.score IS NOT NULL AND x.created_at < r.created_at ORDER BY x.created_at DESC LIMIT 1) prev ON true"
         " WHERE r.branch = p.default_branch AND r.status = 'succeeded' AND r.finished_at > now() - interval '1 day'"
         " AND r.score <= prev.score - $1 ORDER BY r.id", conf.alert_drop)
-    base = env("PUBLIC_URL", "").rstrip("/")
+    # Opened in the last week only: switching alerts on never floods the channel with the old stock.
+    critical = await db.fetch(
+        f"SELECT p.id, p.instance, p.path, l.key, l.response, l.deadline_at, {REFERENTS} AS owners FROM vuln_ledger l JOIN projects p ON p.id = l.project_id"
+        " WHERE l.closed_at IS NULL AND l.priority = 'critical' AND l.opened_at > now() - interval '7 days' ORDER BY l.opened_at")
+    stale = [r for r in await db.fetch("SELECT name, completed_at FROM vuln_sources") if r["completed_at"] is None or r["completed_at"] < datetime.now(TZ) - STALE] \
+        if dtrack.configured() or env("KEV_URL", "") or env("EPSS_URL", "") else []
     async with httpx.AsyncClient(timeout=10) as client:
-        for r in rows:
-            key = f"alerted:{r['id']}"
-            if not await state["arq"].set(key, 1, nx=True, ex=7 * 86400):
-                continue
+        for r in drops:
             link = f" {base}/p/{r['instance']}/{r['path']}" if base else ""
-            text = f"Periskope : le score de {r['path']} ({r['instance']}) est passé de {round(r['before'])} à {round(r['score'])}/100.{link}"
-            props = {"instance": r["instance"], "project": r["path"], "before": r["before"], "score": r["score"], "run": r["id"]}
-            try:
-                resp = await client.post(url, json={"username": "Periskope", "text": text, "props": props})
-                resp.raise_for_status()
-                log.info("alert_sent", run=r["id"], project=r["path"])
-            except httpx.HTTPError as e:
-                await state["arq"].delete(key)  # retried on the next pass
-                log.warning("alert_failed", run=r["id"], error=type(e).__name__)
+            await post(client, url, "score_drop", str(r["id"]),
+                       f"Periskope : le score de {r['path']} ({r['instance']}) est passé de {round(r['before'])} à {round(r['score'])}/100.{link}",
+                       {"instance": r["instance"], "project": r["path"], "before": r["before"], "score": r["score"], "run": r["id"]})
+        for r in critical:
+            owners = " ".join(sorted(set(re.findall(r"@[\w.-]+", r["owners"] or "")))) or "aucun référent dans CODEOWNERS"
+            link = f" {base}/vulnerabilites?cve={r['key']}" if base else ""
+            due = f", à corriger avant le {r['deadline_at'].astimezone(TZ):%d/%m/%Y}" if r["deadline_at"] else ""
+            await post(client, url, "critical", f"{r['id']}:{r['key']}",
+                       f"Periskope : {r['key']} (priorité critique) est ouverte sur {r['path']} ({r['instance']}){due}. Référent : {owners}.{link}",
+                       {"instance": r["instance"], "project": r["path"], "cve": r["key"], "response": r["response"]})
+        for r in stale:
+            # Once a day per source while it stays stale.
+            since = f"depuis le {r['completed_at'].astimezone(TZ):%d/%m/%Y}" if r["completed_at"] else "jamais mise à jour"
+            await post(client, url, "stale_source", f"{r['name']}:{datetime.now(TZ).date()}",
+                       f"Periskope : la source de vulnérabilités {r['name']} n'est plus à jour ({since}) : les nouvelles CVE ne sont plus signalées.",
+                       {"source": r["name"]})
 
 
 @app.get("/metrics", response_class=PlainTextResponse)

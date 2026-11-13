@@ -70,10 +70,10 @@ def router(state: dict[str, Any], current, audit) -> APIRouter:
         evidence_days: int | None = Field(None, ge=1, le=90)
         branch_run_days: int | None = Field(None, ge=1, le=365)
         alert_drop: int | None = Field(None, ge=1, le=100)
-        sla_critical_hours: int | None = Field(None, ge=1, le=720)
-        sla_high_days: int | None = Field(None, ge=1, le=365)
-        sla_medium_days: int | None = Field(None, ge=1, le=365)
-        sla_low_days: int | None = Field(None, ge=1, le=730)
+        sla_immediate_days: int | None = Field(None, ge=1, le=90)
+        sla_out_of_cycle_days: int | None = Field(None, ge=1, le=365)
+        sla_scheduled_days: int | None = Field(None, ge=1, le=730)
+        exception_days: int | None = Field(None, ge=1, le=365)
 
     @r.put("/settings")
     async def put_settings(body: SettingsPatch, me: Admin) -> dict:

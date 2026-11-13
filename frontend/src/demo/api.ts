@@ -131,6 +131,8 @@ function makeProject(id: number, inst: (typeof INSTANCES)[number], n: number, gr
     last_success_at: never ? null : iso(lastAt), last_error: failed ? "GitLab indisponible (503)" : null,
     last_run_id: never ? null : id * 100 + 5, last_status: "succeeded", results: never ? null : results, history,
     vulns, findings: drawFindings(vulns, r),
+    // From the id, not the generator: the rest of the estate stays what it was.
+    topics: [["prod"], ["prod"], ["prod"], ["test"], ["dev"], ["dev"], []][id % 7],
   };
 }
 
@@ -167,6 +169,7 @@ const row = (x: Demo) => {
 };
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const inScope = (q: URLSearchParams) => PROJECTS.filter((p) => (!q.get("instance") || p.instance === q.get("instance"))
+  && (!q.get("env") || (q.get("env") === "none" ? !p.topics.length : p.topics.includes(q.get("env")!)))
   && (!q.get("namespace") || p.namespace_path === q.get("namespace") || p.namespace_path.startsWith(q.get("namespace") + "/")));
 
 function roadmap(p: Demo) {
@@ -177,7 +180,9 @@ function roadmap(p: Demo) {
 }
 
 const SEV = ["critical", "high", "medium", "low", "info", "unknown"] as const;
-const SLA: Partial<Record<(typeof SEV)[number], number>> = { critical: 24, high: 7 * 24, medium: 30 * 24, low: 90 * 24 };
+// Deadlines by SSVC response (D5); Différé has none.
+const SLA: Record<string, number> = { immediate: 7 * 24, out_of_cycle: 30 * 24, scheduled: 90 * 24 };
+const RESP = ["immediate", "out_of_cycle", "scheduled", "deferred"];
 // Demo exploitation data: Log4Shell, Text4Shell and xz-utils are in KEV; EPSS made up per CVE.
 const KEV = new Set(["CVE-2021-44228", "CVE-2022-42889", "CVE-2024-3094", "CVE-2023-44487"]);
 const epssOf = (key: string) => (KEV.has(key) ? 0.94 : key.startsWith("CVE-") ? [0.94, 0.002, 0.31, 0.05, 0.0004, 0.12][[...key].reduce((a, c) => a + c.charCodeAt(0), 0) % 6] : null);
@@ -187,10 +192,22 @@ const priorityOf = (f: { key: string; severity: string }) => {
   if (e != null && e >= 0.1) return f.severity === "medium" ? "high" : f.severity === "low" ? "medium" : "critical";
   return e != null && f.severity === "critical" ? "high" : f.severity;
 };
-const late = (f: { key: string; severity: string; detected_at: string }) => {
-  const h = SLA[priorityOf(f) as (typeof SEV)[number]];
+type Finding = { key: string; severity: string; detected_at: string; type?: string };
+// The SQL's SSVC, on the demo: exploitation (KEV, EPSS), exposure (prod or no environment), automatable (the RCE-like CVEs) or critical.
+const AUTOMATABLE = new Set(["CVE-2021-44228", "CVE-2022-22965", "CVE-2022-42889", "CVE-2023-44487"]);
+const responseOf = (f: Finding, topics: string[]) => {
+  const exposed = topics.includes("prod") || !topics.some((t) => t === "test" || t === "dev");
+  const strong = f.severity === "critical" || AUTOMATABLE.has(f.key), e = epssOf(f.key) ?? 0;
+  if (KEV.has(f.key)) return exposed ? "immediate" : "out_of_cycle";
+  if (f.severity === "info" || f.severity === "unknown") return "deferred";
+  if (e >= 0.1) return exposed && strong ? "immediate" : exposed ? "out_of_cycle" : "scheduled";
+  return exposed && strong ? "out_of_cycle" : exposed ? "scheduled" : "deferred";
+};
+const late = (f: Finding, topics: string[]) => {
+  const h = SLA[responseOf(f, topics)];
   return !!h && Date.parse(f.detected_at) + h * 3_600_000 < Date.now();
 };
+const PRIO = ["critical", "high", "medium", "low"];
 function vulnSummary(items: Demo[]) {
   const measured = items.filter((x) => x.vulns);
   if (!measured.length) return null;
@@ -198,11 +215,12 @@ function vulnSummary(items: Demo[]) {
   const exposed = measured.filter((x) => x.vulns!.critical + x.vulns!.high > 0)
     .sort((a, b) => b.vulns!.critical - a.vulns!.critical || b.vulns!.high - a.vulns!.high || a.path.localeCompare(b.path)).slice(0, 5)
     .map(({ instance, path, vulns }) => ({ instance, path, vulns: vulns! }));
-  const found = measured.flatMap((x) => x.findings ?? []);
-  const overdue = Object.fromEntries(Object.keys(SLA).map((k) => [k, found.filter((f) => f.severity === k && late(f)).length]));
-  const byPriority = Object.fromEntries(Object.keys(SLA).map((k) => [k, found.filter((f) => priorityOf(f) === k).length]));
+  const found = measured.flatMap((x) => (x.findings ?? []).map((f) => ({ f, t: x.topics })));
+  const overdue = Object.fromEntries(Object.keys(SLA).map((k) => [k, found.filter(({ f, t }) => responseOf(f, t) === k && late(f, t)).length]));
+  const byResponse = Object.fromEntries(RESP.map((k) => [k, found.filter(({ f, t }) => responseOf(f, t) === k).length]));
+  const byPriority = Object.fromEntries(PRIO.map((k) => [k, found.filter(({ f }) => priorityOf(f) === k).length]));
   return { ...sums, total: SEV.reduce((s, k) => s + sums[k], 0), projects: measured.length, exposed, sla_hours: SLA, overdue, dated: found.length,
-    by_priority: byPriority, kev: found.filter((f) => KEV.has(f.key)).length };
+    by_response: byResponse, by_priority: byPriority, kev: found.filter(({ f }) => KEV.has(f.key)).length };
 }
 
 class DemoError extends Error {
@@ -235,6 +253,107 @@ function demoFix(instance: string, path: string, check: string | undefined, prev
   if (preview) return f.preview;
   return f.kind === "mr" ? { done: "Démo : la merge request aurait été ouverte avec votre compte GitLab. Rien n'a été modifié." }
     : { done: "Démo : le réglage aurait été appliqué avec votre compte GitLab. Rien n'a été modifié." };
+}
+
+// Dependency-Track in the demo: the projects of the first group with findings are bricks of the CMS, in prod and test and in two JAR deliveries.
+const DT_TYPES = new Set(["dependency_scanning", "container_scanning"]);
+const BRICKS = PROJECTS.filter((x) => x.findings?.some((f) => DT_TYPES.has(f.type)) && x.instance === PROJECTS[0].instance).slice(0, 9);
+const TREES = [
+  { uuid: "t-prod", name: "CMS · prod", env: "prod", active: true, minor: 4 }, { uuid: "t-test", name: "CMS · test", env: "test", active: true, minor: 5 },
+  { uuid: "t-520", name: "CMS · 5.2.0 (livraison JAR)", env: null, active: true, minor: 4 }, { uuid: "t-510", name: "CMS · 5.1.0 (livraison JAR)", env: null, active: false, minor: 2 },
+];
+const brickName = (x: Demo) => x.path.split("/").at(-1)!;
+const versionOf = (x: Demo, t: (typeof TREES)[number]) => `${1 + (x.id % 3)}.${t.minor}.${x.id % 4}`;
+// What DT finds in a brick of a tree: its dependency findings; test has fixed the most severe one; 5.1.0 still carries an older one.
+const dtFindings = (x: Demo, t: (typeof TREES)[number]) => {
+  const own = (x.findings ?? []).filter((f) => DT_TYPES.has(f.type));
+  return t.env === "test" ? own.slice(1) : t.uuid === "t-510" ? [...own, { key: "CVE-2022-22965", cve: true, severity: "critical", title: "Spring4Shell : exécution de code dans spring-beans", type: "dependency_scanning", detected_at: iso(NOW - 300 * DAY) }] : own;
+};
+const dtTrees = (x: Demo) => (BRICKS.includes(x) ? TREES.filter((t) => t.active).map((t) => t.name) : null);
+const sbom = (x: Demo) => x.id % 5 !== 0;
+const byTag = (x: Demo) => x.id % 7 === 2;
+const noPurl = (x: Demo) => x.id % 4;
+function dtBricksOf(x: Demo) {
+  return BRICKS.includes(x) ? TREES.filter((t) => t.active).map((t) => ({ tree: t.name, env: t.env, uuid: `${t.uuid}-${x.id}`, version: versionOf(x, t),
+    sbom: sbom(x), by_tag: t.env === "prod" && byTag(x), components: sbom(x) ? 120 + x.id % 90 : null, no_purl: sbom(x) ? noPurl(x) : null })) : null;
+}
+const where = (x: Demo, t: (typeof TREES)[number], f: { key: string }) => `${brickName(x)} ${versionOf(x, t)} · ${f.key === "CVE-2021-44228" ? "org.apache.logging.log4j:log4j-core@2.14.1" : "dépendance"}`;
+function dtVersion(t: (typeof TREES)[number]) {
+  const found = new Map<string, { key: string; cve: boolean; title: string; severity: string; response: string; kev: boolean; epss: number | null; where: string[] }>();
+  for (const x of BRICKS) for (const f of dtFindings(x, t)) {
+    const g = found.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, response: responseOf(f, t.env === "test" ? ["test"] : ["prod"]), kev: KEV.has(f.key), epss: epssOf(f.key), where: [] };
+    g.where.push(where(x, t, f));
+    found.set(f.key, g);
+  }
+  return [...found.values()].sort((a, b) => RESP.indexOf(a.response) - RESP.indexOf(b.response) || SEV.indexOf(a.severity as (typeof SEV)[number]) - SEV.indexOf(b.severity as (typeof SEV)[number]) || a.key.localeCompare(b.key));
+}
+const treeOf = (uuid: string | null) => {
+  const t = TREES.find((x) => x.uuid === uuid);
+  if (!t) throw new DemoError(404, "Version introuvable.");
+  return t;
+};
+const treeRow = (t: (typeof TREES)[number]) => ({ uuid: t.uuid, name: t.name, env: t.env, active: t.active, synced_at: iso(NOW - 1800_000) });
+const EXCEPTIONS = () => BRICKS.slice(0, 3).map((x, i) => ({ key: ["CVE-2023-26136", "CVE-2020-8908", "CVE-2024-28849"][i], title: null, severity: (["medium", "low", "medium"] as const)[i],
+  kind: "exception", state: "EXPLOITABLE", justification: null, response: "WILL_NOT_FIX", detail: ["Correctif bloqué par le fournisseur, contournement en place (proxy)", "Répertoire temporaire jamais utilisé en prod", "Risque accepté jusqu'à la migration de la brique"][i],
+  analysed_at: iso(NOW - [120, 40, 100][i] * DAY), expires_on: iso(NOW + [-30, 50, -10][i] * DAY).slice(0, 10), expired: [true, false, true][i], brick: brickName(x), version: versionOf(x, TREES[0]), tree: "CMS · prod", instance: x.instance, path: x.path }));
+const NOT_CONCERNED = () => BRICKS.slice(2, 5).map((x, i) => ({ key: ["CVE-2023-4863", "CVE-2021-23337", "CVE-2022-24999"][i], title: null, severity: "high", kind: "not_concerned", state: "NOT_AFFECTED",
+  justification: ["CODE_NOT_REACHABLE", "CODE_NOT_PRESENT", "PROTECTED_AT_PERIMETER"][i], response: null, detail: ["libwebp présente dans l'image de base, jamais chargée", "Fonction template() non utilisée", "Parseur exposé derrière le proxy qui filtre"][i],
+  analysed_at: iso(NOW - (10 + 20 * i) * DAY), expires_on: null, expired: null, brick: brickName(x), version: versionOf(x, TREES[0]), tree: "CMS · prod", instance: x.instance, path: x.path }));
+
+function dtRoute(p: string, q: URLSearchParams): unknown {
+  if (p === "/dt/work") {
+    const mine = BRICKS.filter((x) => inScope(q).includes(x));
+    const ref = (x: Demo) => ({ uuid: `t-prod-${x.id}`, name: brickName(x), version: versionOf(x, TREES[0]), components: 120 + x.id % 90, no_purl: noPurl(x), tree: "CMS · prod", instance: x.instance, path: x.path });
+    return { configured: true, synced_at: iso(NOW - 1800_000), no_sbom: mine.filter((x) => !sbom(x)).map(ref), by_tag: mine.filter(byTag).map(ref),
+      no_purl: mine.filter((x) => sbom(x) && noPurl(x)).map(ref), expired_exceptions: EXCEPTIONS().filter((e) => e.expired && mine.some((x) => x.path === e.path)).length,
+      stale_sources: [{ name: "NVD", completed_at: iso(Date.now() - 4 * DAY), via: "dependency-track" }] };
+  }
+  if (p === "/dt/versions") return TREES.map((t) => {
+    const f = dtVersion(t);
+    return { ...treeRow(t), bricks: BRICKS.length, no_sbom: BRICKS.filter((x) => !sbom(x)).length, open: f.length, immediate: f.filter((x) => x.response === "immediate").length };
+  });
+  const one = /^\/dt\/versions\/(.+)$/.exec(p);
+  if (one) {
+    const t = treeOf(one[1]);
+    return { tree: treeRow(t), findings: dtVersion(t), bricks: BRICKS.map((x) => ({ uuid: `${t.uuid}-${x.id}`, name: brickName(x), version: versionOf(x, t), active: t.active, sbom: sbom(x),
+      by_tag: t.env === "prod" && byTag(x), components: sbom(x) ? 120 + x.id % 90 : null, no_purl: sbom(x) ? noPurl(x) : null, instance: x.instance, path: x.path })) };
+  }
+  if (p === "/dt/compare") {
+    const a = treeOf(q.get("a")), b = treeOf(q.get("b")), fa = dtVersion(a), fb = dtVersion(b);
+    const ka = new Set(fa.map((x) => x.key)), kb = new Set(fb.map((x) => x.key));
+    return { a: treeRow(a), b: treeRow(b), bricks: BRICKS.filter((x) => versionOf(x, a) !== versionOf(x, b)).map((x) => ({ name: brickName(x), a: versionOf(x, a), b: versionOf(x, b) })),
+      only_a: fa.filter((x) => !kb.has(x.key)), only_b: fb.filter((x) => !ka.has(x.key)), both: fb.filter((x) => ka.has(x.key)) };
+  }
+  const cve = /^\/dt\/cve\/(.+)$/.exec(p);
+  if (cve) {
+    const key = cve[1], places: Record<string, unknown>[] = [], fixed: Record<string, unknown>[] = [], ledger: Record<string, unknown>[] = [];
+    for (const t of TREES) for (const x of BRICKS) {
+      const f = dtFindings(x, t).find((v) => v.key === key);
+      const row = { tree: t.name, env: t.env, tree_active: t.active, brick: brickName(x), version: versionOf(x, t), active: true };
+      if (f) places.push({ ...row, tree_uuid: t.uuid, instance: x.instance, path: x.path, component_name: key === "CVE-2021-44228" ? "org.apache.logging.log4j:log4j-core" : "dépendance",
+        component_version: key === "CVE-2021-44228" ? "2.14.1" : "1.0", title: f.title, severity: f.severity, vector: null, kev: KEV.has(key), epss: epssOf(key),
+        state: t.env === "prod" && x === BRICKS[0] ? "IN_TRIAGE" : null, analysis_response: t.env === "prod" && x === BRICKS[0] ? "UPDATE" : null,
+        justification: null, detail: t.env === "prod" && x === BRICKS[0] ? "Patch ciblé livré hors cycle (log4j 2.17.1), version corrigée en qualification" : null,
+        analysed_at: t.env === "prod" && x === BRICKS[0] ? iso(NOW - 2 * DAY) : null, expires_on: null, attributed_at: f.detected_at, status: "open", response: responseOf(f, t.env === "test" ? ["test"] : ["prod"]) });
+      else if (places.some((pl) => pl.brick === brickName(x)) || BRICKS.some((y) => y === x && (y.findings ?? []).some((v) => v.key === key))) fixed.push(row);
+    }
+    for (const x of PROJECTS) for (const f of x.findings ?? []) if (f.key === key) ledger.push({ instance: x.instance, path: x.path, opened_at: f.detected_at, closed_at: null,
+      priority: priorityOf(f), response: responseOf(f, x.topics), deadline_at: SLA[responseOf(f, x.topics)] ? iso(Date.parse(f.detected_at) + SLA[responseOf(f, x.topics)] * 3_600_000) : null });
+    if (key === "CVE-2022-22965") ledger.push({ instance: BRICKS[0].instance, path: BRICKS[0].path, opened_at: iso(NOW - 300 * DAY), closed_at: iso(NOW - 250 * DAY), priority: "critical", response: "immediate", deadline_at: iso(NOW - 293 * DAY) });
+    if (!places.length && !ledger.length) throw new DemoError(404, "CVE introuvable.");
+    return { key, places, fixed_in: fixed, ledger };
+  }
+  if (p === "/dt/exceptions") return { exceptions: EXCEPTIONS().sort((a, b) => a.expires_on.localeCompare(b.expires_on)), not_concerned: NOT_CONCERNED() };
+  if (p === "/indicators") {
+    const months = Array.from({ length: 6 }, (_, k) => {
+      const d = new Date(NOW); d.setDate(1); d.setMonth(d.getMonth() - 5 + k);
+      const fixed = [9, 12, 7, 14, 11, 8][k], on = [5, 8, 6, 12, 10, 8][k];
+      return { month: d.toISOString().slice(0, 10), critical_fixed: fixed, critical_on_time: on, days: { critical: [14, 11, 9, 7, 6, 5][k], high: [40, 35, 33, 28, 26, 22][k], medium: [80, 76, 70, 66, 61, 58][k], low: null },
+        overdue_stock: [64, 58, 51, 47, 40, 33][k] };
+    });
+    return { months, sbom: { bricks: BRICKS.length, with_sbom: BRICKS.filter(sbom).length }, exceptions: { active: 1, expired: 2 } };
+  }
+  return undefined;
 }
 
 function route(path: string, method: string): unknown {
@@ -273,12 +392,15 @@ function route(path: string, method: string): unknown {
   }
   if (p === "/projects/summary") {
     const items = inScope(q), sc = items.filter((x) => x.score != null);
+    const every = new URLSearchParams(q); every.delete("env");
+    const all = inScope(every), count = (e: string) => all.filter((x) => x.topics.includes(e)).length;
     const dims = [...new Set(ACTIVITIES.map((a) => a.dimension))].sort();
     const gaps = ACTIVITIES.filter((a) => a.level <= TARGET).map((a) => {
       const measured = sc.filter((x) => ["implemented", "partial", "not_implemented"].includes(x.statuses![a.name].status));
       return { activity: a.name, level: a.level, missing: measured.filter((x) => x.statuses![a.name].status !== "implemented").length, measured: measured.length };
-    }).filter((g) => g.missing).sort((a, b) => b.missing - a.missing || a.level - b.level).slice(0, 5);
+    }).filter((g) => g.missing).sort((a, b) => b.missing - a.missing || a.level - b.level);
     return {
+      envs: { prod: count("prod"), test: count("test"), dev: count("dev"), none: all.filter((x) => !x.topics.length).length, total: all.length },
       total: items.length, analysed: sc.length, score: avg(sc.map((x) => x.score!)), coverage: avg(sc.map((x) => x.coverage!)),
       below_target: sc.filter((x) => x.score! < 100).length, failed: items.filter((x) => x.last_error).length, never: items.length - sc.length,
       high: sc.filter((x) => x.score! >= 75).length, mid: sc.filter((x) => x.score! >= 50 && x.score! < 75).length, low: sc.filter((x) => x.score! < 50).length,
@@ -287,6 +409,10 @@ function route(path: string, method: string): unknown {
       vulns: vulnSummary(items),
       feeds: { kev: { configured: true, fetched_at: iso(NOW), rows: 1484, published: null, error: null },
         epss: { configured: true, fetched_at: iso(NOW), rows: 299112, published: iso(NOW - DAY), error: null } },
+      // Dated from the real clock: the 2-day freshness rule is read against today.
+      sources: [{ name: "EPSS", completed_at: iso(Date.now()), error: null, via: "periskope" }, { name: "KEV", completed_at: iso(Date.now()), error: null, via: "periskope" },
+        { name: "GITHUB", completed_at: iso(Date.now() - 3600_000), error: null, via: "dependency-track" }, { name: "NVD", completed_at: iso(Date.now() - 4 * DAY), error: null, via: "dependency-track" },
+        { name: "OSV", completed_at: iso(Date.now() - 5 * 3600_000), error: null, via: "dependency-track" }],
       foundation_ok: items.filter(foundation).length, unmeasured: items.filter((x) => x.score == null || x.last_error).length,
       improving: items.filter((x) => trendOf(x) === "up").length, declining: items.filter((x) => trendOf(x) === "down").length,
       compared: items.filter((x) => trendOf(x) != null).length,
@@ -296,22 +422,35 @@ function route(path: string, method: string): unknown {
   }
   if (p === "/vulnerabilities") {
     const measured = inScope(q).filter((x) => x.findings), needle = q.get("q")?.toLowerCase();
-    const groups = new Map<string, { key: string; cve: boolean; title: string; severity: string; projects: number; detected_at: string; overdue: number }>();
-    for (const f of measured.flatMap((x) => x.findings!)) {
+    const groups = new Map<string, { key: string; cve: boolean; title: string; severity: string; projects: number; detected_at: string; overdue: number; response: string }>();
+    for (const [f, t] of measured.flatMap((x) => x.findings!.map((f) => [f, x.topics] as const))) {
       if (needle && !f.key.toLowerCase().includes(needle) && !f.title.toLowerCase().includes(needle)) continue;
-      const g = groups.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, projects: 0, detected_at: f.detected_at, overdue: 0 };
+      const g = groups.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, projects: 0, detected_at: f.detected_at, overdue: 0, response: "deferred" };
       g.projects++;
-      if (late(f)) g.overdue++;
+      if (late(f, t)) g.overdue++;
+      if (RESP.indexOf(responseOf(f, t)) < RESP.indexOf(g.response)) g.response = responseOf(f, t);
       Object.assign(g, { priority: priorityOf(f), kev: KEV.has(f.key), epss: epssOf(f.key), percentile: null });
       if (f.detected_at < g.detected_at) g.detected_at = f.detected_at;
       groups.set(f.key, g);
     }
     const rank = (s: string) => SEV.indexOf(s as (typeof SEV)[number]);
-    return { measured: measured.length, sla_hours: SLA, items: [...groups.values()].sort((a, b) => rank(priorityOf(a)) - rank(priorityOf(b)) || rank(a.severity) - rank(b.severity) || b.projects - a.projects || a.key.localeCompare(b.key)) };
+    return { measured: measured.length, sla_hours: SLA, items: [...groups.values()].sort((a, b) => RESP.indexOf(a.response) - RESP.indexOf(b.response) || rank(priorityOf(a)) - rank(priorityOf(b)) || rank(a.severity) - rank(b.severity) || b.projects - a.projects || a.key.localeCompare(b.key)) };
   }
   if (p === "/vulnerabilities/projects") {
-    return inScope(q).flatMap((x) => (x.findings ?? []).filter((f) => f.key === q.get("key")).map((f) => ({ instance: x.instance, path: x.path, score: x.score, coverage: x.coverage, severity: f.severity, type: f.type, detected_at: f.detected_at, overdue: late(f), priority: priorityOf(f), kev: KEV.has(f.key), epss: epssOf(f.key) })))
+    return inScope(q).flatMap((x) => (x.findings ?? []).filter((f) => f.key === q.get("key")).map((f) => ({ instance: x.instance, path: x.path, score: x.score, coverage: x.coverage, severity: f.severity, type: DT_TYPES.has(f.type) && dtTrees(x) ? "dependency_track" : f.type, detected_at: f.detected_at, overdue: late(f, x.topics), priority: priorityOf(f),
+      response: responseOf(f, x.topics), kev: KEV.has(f.key), epss: epssOf(f.key), ...(DT_TYPES.has(f.type) && dtTrees(x) ? { trees: dtTrees(x), components: [] } : {}) })))
       .sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity) || a.instance.localeCompare(b.instance) || a.path.localeCompare(b.path));
+  }
+  if (p === "/vulnerabilities/by-project") {
+    const needle = q.get("q")?.toLowerCase(), offset = Number(q.get("offset") ?? 0), limit = Number(q.get("limit") ?? 50);
+    const rows = inScope(q).filter((x) => x.findings?.length && (!needle || x.path.toLowerCase().includes(needle))).map((x) => {
+      const f = x.findings!, by = Object.fromEntries(PRIO.map((k) => [k, f.filter((v) => priorityOf(v) === k).length]));
+      const resp = Object.fromEntries(["immediate", "out_of_cycle"].map((k) => [k, f.filter((v) => responseOf(v, x.topics) === k).length]));
+      return { instance: x.instance, path: x.path, score: x.score, coverage: x.coverage, total: f.length, overdue: f.filter((v) => late(v, x.topics)).length,
+        kev: f.filter((v) => KEV.has(v.key)).length, by_priority: by, by_response: resp };
+    }).sort((a, b) => b.by_priority.critical - a.by_priority.critical || b.by_priority.high - a.by_priority.high || b.by_priority.medium - a.by_priority.medium
+      || b.by_priority.low - a.by_priority.low || b.overdue - a.overdue || b.total - a.total || a.path.localeCompare(b.path));
+    return { items: rows.slice(offset, offset + limit), next_offset: offset + limit < rows.length ? offset + limit : null };
   }
   if (p === "/projects/trend") {
     const sc = inScope(q).filter((x) => x.score != null), now = avg(sc.map((x) => x.score!)) ?? 0;
@@ -344,6 +483,8 @@ function route(path: string, method: string): unknown {
     }
     return { ...run, instance: proj.instance, path: proj.path, default_branch: "main", results: proj.results };
   }
+  const dt = dtRoute(p, q);
+  if (dt !== undefined) return dt;
   const projMatch = /^\/projects\/([^/]+)\/(.+?)(\/branches|\/branch-scores|\/runs|\/roadmap)?$/.exec(p);
   if (projMatch) {
     const proj = PROJECTS.find((x) => x.instance === projMatch[1] && x.path === projMatch[2]);
@@ -360,7 +501,7 @@ function route(path: string, method: string): unknown {
     if (projMatch[3] === "/runs") return { items: [...proj.history].reverse(), next_cursor: null };
     if (projMatch[3] === "/roadmap") return roadmap(proj);
     const last = proj.history.at(-1);
-    return { ...row(proj), statuses: proj.statuses, can_launch: false, active_run: null,
+    return { ...row(proj), statuses: proj.statuses, can_launch: false, active_run: null, dt: dtBricksOf(proj),
       last_run: last && { id: last.id, commit_sha: last.commit_sha, finished_at: last.finished_at, results: proj.results, reused_from: null } };
   }
   if (p === "/scope") return CHECKS.map((c) => ({ target: "check", target_id: c.id, decision: "retained",

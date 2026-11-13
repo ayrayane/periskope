@@ -10,9 +10,12 @@ spec:
     spec:
       securityContext: { runAsNonRoot: true, runAsUser: 999, seccompProfile: { type: RuntimeDefault } }
       automountServiceAccountToken: false
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets: [{ name: {{ . }} }]
+      {{- end }}
       containers:
         - name: valkey
-          image: docker.io/valkey/valkey:8.0-alpine
+          image: {{ .Values.image.valkey }}
           args: [--save, "", --appendonly, "no", --maxmemory, 200mb, --maxmemory-policy, noeviction]
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           ports: [{ name: redis, containerPort: 6379 }]

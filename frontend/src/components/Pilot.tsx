@@ -1,20 +1,42 @@
-// Steering cards for a scope: score trend and declining projects, heat map of children × DSOMM dimensions, exports.
+// Steering cards for a scope: environment filter, score trend and declining projects, heat map of children × DSOMM dimensions, exports.
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { api, download, Heatmap, Instance, Trend } from "../api";
-import { scopeUrl } from "./GroupNav";
+import { Link, useSearchParams } from "react-router-dom";
+import { api, download, Env, Heatmap, Instance, Summary, Trend } from "../api";
+import { useScopeUrl } from "./GroupNav";
 import { dimension } from "../labels";
 
 
-export const scopeQuery = (instance?: string, namespace?: string) =>
-  new URLSearchParams(Object.entries({ instance, namespace }).filter(([, v]) => v) as [string, string][]).toString();
+type Scope = { instance?: string; namespace?: string; env?: string };
+export const scopeQuery = (instance?: string, namespace?: string, env?: string) =>
+  new URLSearchParams(Object.entries({ instance, namespace, env }).filter(([, v]) => v) as [string, string][]).toString();
+
+export const ENVS: [Env, string][] = [["prod", "Production"], ["test", "Test"], ["dev", "Développement"], ["none", "Non classés"]];
+
+/** Narrows the page to one environment; the choice lives in ?env= so the other tabs and a shared link keep it. */
+export function EnvFilter({ counts }: { counts?: Summary["envs"] }) {
+  const [params, setParams] = useSearchParams();
+  const env = params.get("env");
+  const pick = (v: string | null) => {
+    const next = new URLSearchParams(params);
+    if (v) next.set("env", v); else next.delete("env");
+    setParams(next, { replace: true });
+  };
+  return (
+    <div className="status-filter" role="group" aria-label="Environnement">
+      <button type="button" aria-pressed={!env} onClick={() => pick(null)}>Tous <span className="sf-count">{counts?.total ?? "…"}</span></button>
+      {ENVS.map(([k, label]) => (
+        <button key={k} type="button" aria-pressed={env === k} onClick={() => pick(k)}>{label} <span className="sf-count">{counts?.[k] ?? "…"}</span></button>
+      ))}
+    </div>
+  );
+}
 
 const band = (v: number) => (v >= 75 ? "high" : v >= 50 ? "mid" : "low");
 const MONTH = new Intl.DateTimeFormat("fr-FR", { month: "short", year: "2-digit" });
 
-export function TrendCard({ instance, namespace }: { instance?: string; namespace?: string }) {
-  const qs = scopeQuery(instance, namespace);
+export function TrendCard({ instance, namespace, env }: Scope) {
+  const qs = scopeQuery(instance, namespace, env);
   const trend = useQuery({ queryKey: ["trend", qs], queryFn: () => api<Trend>(`/projects/trend?${qs}`), staleTime: 60_000 });
   const t = trend.data;
   const pts = t?.months ?? [];
@@ -53,8 +75,9 @@ export function TrendCard({ instance, namespace }: { instance?: string; namespac
   );
 }
 
-export function HeatmapCard({ instance, namespace, instances }: { instance?: string; namespace?: string; instances: Instance[] }) {
-  const qs = scopeQuery(instance, namespace);
+export function HeatmapCard({ instance, namespace, env, instances }: Scope & { instances: Instance[] }) {
+  const scopeUrl = useScopeUrl();
+  const qs = scopeQuery(instance, namespace, env);
   const heat = useQuery({ queryKey: ["heatmap", qs], queryFn: () => api<Heatmap>(`/groups/heatmap?${qs}`), staleTime: 60_000 });
   const h = heat.data;
   if (!h || h.rows.length === 0) return null;
@@ -91,8 +114,8 @@ export function HeatmapCard({ instance, namespace, instances }: { instance?: str
   );
 }
 
-export function ExportBar({ instance, namespace }: { instance?: string; namespace?: string }) {
-  const qs = scopeQuery(instance, namespace);
+export function ExportBar({ instance, namespace, env }: Scope) {
+  const qs = scopeQuery(instance, namespace, env);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const get = (detail: boolean) => {

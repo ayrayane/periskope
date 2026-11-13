@@ -1,17 +1,20 @@
 // Navigation by GitLab instance, then group and subgroup, as GitLab itself nests them. Counts and scores roll up to parents.
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, Group, Instance } from "../api";
 
 type Node = { path: string; name: string; projects: number; analysed: number; sum: number; children: Map<string, Node> };
 
-export const scopeUrl = (instance?: string, namespace?: string) => {
-  const q = new URLSearchParams();
-  if (instance) q.set("instance", instance);
-  if (namespace) q.set("namespace", namespace);
-  return q.size ? `/?${q}` : "/";
-};
+/** The dashboard of another scope, on the same tab and the same environment as the current page. */
+export function useScopeUrl() {
+  const [params] = useSearchParams();
+  return (instance?: string, namespace?: string) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries({ instance, namespace, onglet: params.get("onglet"), env: params.get("env") })) if (v) q.set(k, v);
+    return q.size ? `/?${q}` : "/";
+  };
+}
 
 /** One tree per instance; a group without projects of its own still appears when a subgroup has some. */
 export function buildTree(groups: Group[], instance: string): Node {
@@ -44,6 +47,7 @@ export function useScopeData() {
 
 export default function GroupNav({ instance, namespace }: { instance?: string; namespace?: string }) {
   const { instances, groups } = useScopeData();
+  const scopeUrl = useScopeUrl();
   const [open, setOpen] = useState<Set<string>>(new Set());
   // The current group's ancestors open by themselves, so a shared link lands on a visible entry.
   useEffect(() => {
@@ -79,7 +83,7 @@ export default function GroupNav({ instance, namespace }: { instance?: string; n
 
   return (
     <nav className="group-nav" aria-label="Instances et groupes GitLab">
-      <Link to="/" className={`nav-all${!instance ? " current" : ""}`} aria-current={!instance ? "page" : undefined}>
+      <Link to={scopeUrl()} className={`nav-all${!instance ? " current" : ""}`} aria-current={!instance ? "page" : undefined}>
         Toutes les instances <span className="nav-count">{total}</span>
       </Link>
       {visible.map((i) => {
@@ -107,9 +111,10 @@ export default function GroupNav({ instance, namespace }: { instance?: string; n
 export function ScopeCrumbs({ instance, namespace, instances, tail }: { instance?: string; namespace?: string; instances: Instance[]; tail?: React.ReactNode }) {
   const segs = namespace?.split("/") ?? [];
   const inst = instances.find((i) => i.slug === instance);
+  const scopeUrl = useScopeUrl();
   return (
     <nav className="crumbs" aria-label="Fil d'Ariane">
-      <Link to="/">Tableau de bord</Link>
+      <Link to={scopeUrl()}>Tableau de bord</Link>
       {instance && <> <span aria-hidden="true">›</span> <Link to={scopeUrl(instance)}>{inst?.name ?? instance}</Link></>}
       {segs.map((s, i) => <span key={i}> <span aria-hidden="true">›</span> <Link to={scopeUrl(instance, segs.slice(0, i + 1).join("/"))}>{s}</Link></span>)}
       {tail && <> <span aria-hidden="true">›</span> {tail}</>}

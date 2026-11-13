@@ -12,6 +12,7 @@ import { Help } from "../components/Help";
 import Radar from "../components/Radar";
 import { compareBy, SortTh, StatusFilter, useSort } from "../components/TableTools";
 import { ActivityBadge, CheckBadge, PracticeCounts, RUN_LABEL, Score, Skeleton, TRIGGER, when } from "../components/status";
+import { ProjectBricks } from "../components/Dtrack";
 import { NOT_MEASURED, total, VulnBar } from "../components/Vulns";
 import { ScopeEditor } from "./Scope";
 import { dimension as dimLabel, practice } from "../labels";
@@ -171,12 +172,16 @@ export default function Project() {
           <Checks results={results} checks={checks.data ?? []} url={url} instance={p.instance} />
           </>
         ) : tab === "vulnerabilites" ? (
+          <>
           <section className="card vulns vulns-project" aria-labelledby="vulns-title">
             <h2 id="vulns-title">Vulnérabilités ouvertes {p.vulns && <span className="muted">{total(p.vulns)}</span>}</h2>
             {p.vulns ? <VulnBar v={p.vulns} /> : <p className="muted">{NOT_MEASURED}</p>}
-            {results["gitlab.sbom_artifact"]?.status === "fail" && <p className="banner">Aucun SBOM CycloneDX publié par le pipeline : GitLab ne peut pas rapprocher les dépendances des CVE, un zéro ici ne prouve rien.</p>}
+            {p.dt && <p className="muted small">Dépendances et images d'après Dependency-Track ; code, secrets et application d'après GitLab. <Link to={`/vulnerabilites?vue=projets&q=${encodeURIComponent(p.path)}`}>Détail par CVE</Link></p>}
+            {!p.dt && results["gitlab.sbom_artifact"]?.status === "fail" && <p className="banner">Aucun SBOM CycloneDX publié par le pipeline : GitLab ne peut pas rapprocher les dépendances des CVE, un zéro ici ne prouve rien.</p>}
             {p.vulns && gitlab && !DEMO && <a href={`${gitlab.url.replace(/\/$/, "")}/${p.path}/-/security/vulnerability_report`} target="_blank" rel="noreferrer">Voir le détail dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
           </section>
+          {p.dt && p.dt.length > 0 && <ProjectBricks bricks={p.dt} />}
+          </>
         ) : tab === "a-faire" ? (
           <>
           <p className="panel-intro">Le plan pour atteindre le niveau cible <Help term="cible" label="le niveau cible" />, dans l'ordre : niveaux bas et prérequis d'abord.</p>

@@ -1,8 +1,8 @@
 // Committee report of a scope: everything on one printable page, saved as PDF from the browser's print dialog.
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { api, DEMO, ProjectRow, Summary } from "../api";
-import { scopeQuery, HeatmapCard, TrendCard } from "../components/Pilot";
+import { api, DEMO, Indicators, ProjectRow, Summary } from "../api";
+import { ENVS, scopeQuery, HeatmapCard, TrendCard } from "../components/Pilot";
 import { useScopeData } from "../components/GroupNav";
 import { Skeleton, when } from "../components/status";
 import { dimension, practice } from "../labels";
@@ -23,14 +23,16 @@ async function allProjects(qs: string): Promise<ProjectRow[]> {
 
 export default function Report() {
   const [params] = useSearchParams();
-  const instance = params.get("instance") ?? undefined, namespace = params.get("namespace") ?? undefined;
-  const qs = scopeQuery(instance, namespace);
+  const instance = params.get("instance") ?? undefined, namespace = params.get("namespace") ?? undefined, env = params.get("env") ?? undefined;
+  const qs = scopeQuery(instance, namespace, env);
   const { instances } = useScopeData();
   const inst = instances.find((i) => i.slug === instance);
   const summary = useQuery({ queryKey: ["projects-summary", qs], queryFn: () => api<Summary>(`/projects/summary?${qs}`) });
   const projects = useQuery({ queryKey: ["report-projects", qs], queryFn: () => allProjects(qs) });
+  const indicators = useQuery({ queryKey: ["indicators", qs], queryFn: () => api<Indicators>(`/indicators?${qs}${qs ? "&" : ""}months=6`) });
   const s = summary.data;
-  const scope = namespace ? `Groupe ${namespace}${inst ? ` · ${inst.name}` : ""}` : inst ? inst.name : "Toutes les instances GitLab";
+  const scope = (namespace ? `Groupe ${namespace}${inst ? ` · ${inst.name}` : ""}` : inst ? inst.name : "Toutes les instances GitLab")
+    + (env ? ` · Environnement : ${ENVS.find(([k]) => k === env)?.[1] ?? env}` : "");
   const today = new Intl.DateTimeFormat("fr-FR", { dateStyle: "long", timeStyle: "short" }).format(new Date());
 
   if (!s) return <Skeleton lines={8} label="Préparation du rapport…" />;
@@ -60,6 +62,8 @@ export default function Report() {
         <div><b className="t-amber">{s.below_target}</b><span>sous leur niveau cible</span></div>
         <div><b>{s.failed}</b><span>analyses impossibles (source injoignable)</span></div>
       </section>
+
+      {indicators.data && <Kpis i={indicators.data} />}
 
       <section className="report-block">
         <h2>Répartition des scores</h2>
@@ -112,13 +116,13 @@ export default function Report() {
         {s.gaps.length === 0 ? <p>Aucune.</p> : (
           <table className="report-table">
             <thead><tr><th scope="col">Pratique</th><th scope="col">Niveau</th><th scope="col">Projets concernés</th></tr></thead>
-            <tbody>{s.gaps.map((g) => <tr key={g.activity}><td title={g.activity}>{practice(g.activity)}</td><td>{g.level}</td><td>{g.missing} sur {g.measured} ({Math.round((100 * g.missing) / Math.max(1, g.measured))} %)</td></tr>)}</tbody>
+            <tbody>{s.gaps.slice(0, 5).map((g) => <tr key={g.activity}><td title={g.activity}>{practice(g.activity)}</td><td>{g.level}</td><td>{g.missing} sur {g.measured} ({Math.round((100 * g.missing) / Math.max(1, g.measured))} %)</td></tr>)}</tbody>
           </table>
         )}
       </section>
 
-      <div className="report-two"><TrendCard instance={instance} namespace={namespace} /></div>
-      <HeatmapCard instance={instance} namespace={namespace} instances={instances} />
+      <div className="report-two"><TrendCard instance={instance} namespace={namespace} env={env} /></div>
+      <HeatmapCard instance={instance} namespace={namespace} env={env} instances={instances} />
 
       <section className="report-block">
         <h2>Projets du périmètre</h2>
@@ -142,5 +146,40 @@ export default function Report() {
         <p className="muted small">Le détail des preuves de chaque projet, pratique par pratique, est dans l'export « CSV détaillé » du tableau de bord.</p>
       </section>
     </article>
+  );
+}
+
+const MONTH = new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" });
+const days = (d: number | null | undefined) => (d == null ? "—" : `${Math.round(d)} j`);
+
+/** The five indicators for management (D11): the commitment kept on critical CVEs, real speed, the debt, SBOM trust, accepted risks. */
+function Kpis({ i }: { i: Indicators }) {
+  const last = i.months.at(-1)!;
+  const onTime = (m: Indicators["months"][number]) => (m.critical_fixed ? `${Math.round((100 * m.critical_on_time) / m.critical_fixed)} %` : "—");
+  const trend = i.months.length > 1 ? last.overdue_stock - i.months.at(-2)!.overdue_stock : 0;
+  return (
+    <section className="report-block">
+      <h2>Indicateurs de suivi des vulnérabilités</h2>
+      <p>Cibles proposées : 90 % des CVE critiques corrigées dans les délais, critiques corrigées en 7 jours en moyenne, stock hors délai en baisse chaque mois,
+        100 % des briques en prod avec un SBOM, aucune exception expirée. Une CVE est corrigée quand elle ne reste dans aucune version en service.</p>
+      <section className="report-kpis" aria-label="Indicateurs du mois">
+        <div><b className={last.critical_fixed && last.critical_on_time / last.critical_fixed >= 0.9 ? "t-pass" : last.critical_fixed ? "t-fail" : ""}>{onTime(last)}</b>
+          <span>critiques corrigées dans les délais ce mois-ci ({last.critical_on_time} sur {last.critical_fixed})</span></div>
+        <div><b className={last.days.critical != null && last.days.critical > 7 ? "t-fail" : ""}>{days(last.days.critical)}</b><span>délai moyen de correction d'une critique</span></div>
+        <div><b className={trend > 0 ? "t-fail" : "t-pass"}>{last.overdue_stock}</b><span>CVE ouvertes hors délai ({trend > 0 ? `+${trend}` : trend} sur un mois)</span></div>
+        <div><b className={i.sbom && i.sbom.bricks && i.sbom.with_sbom < i.sbom.bricks ? "t-fail" : "t-pass"}>{i.sbom?.bricks ? `${Math.round((100 * i.sbom.with_sbom) / i.sbom.bricks)} %` : "—"}</b>
+          <span>briques en prod avec un SBOM{i.sbom ? ` (${i.sbom.with_sbom} sur ${i.sbom.bricks})` : " (Dependency-Track non configuré)"}</span></div>
+        <div><b className={i.exceptions?.expired ? "t-fail" : ""}>{i.exceptions ? i.exceptions.expired : "—"}</b><span>exceptions expirées, sur {i.exceptions ? i.exceptions.active + i.exceptions.expired : 0} acceptées</span></div>
+      </section>
+      <table className="report-table">
+        <thead><tr><th scope="col">Mois</th><th scope="col">Critiques corrigées dans les délais</th><th scope="col">Délai moyen (critique / élevée / moyenne)</th><th scope="col">Stock hors délai en fin de mois</th></tr></thead>
+        <tbody>
+          {i.months.map((m) => (
+            <tr key={m.month}><td>{MONTH.format(new Date(m.month))}</td><td>{onTime(m)}{m.critical_fixed ? ` (${m.critical_on_time}/${m.critical_fixed})` : ""}</td>
+              <td>{days(m.days.critical)} / {days(m.days.high)} / {days(m.days.medium)}</td><td>{m.overdue_stock}</td></tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
   );
 }

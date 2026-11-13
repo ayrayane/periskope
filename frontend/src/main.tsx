@@ -15,6 +15,7 @@ import ScopePage from "./pages/Scope";
 const Admin = lazy(() => import("./pages/Admin"));
 const Report = lazy(() => import("./pages/Report"));
 const Vulnerabilities = lazy(() => import("./pages/Vulnerabilities"));
+const CveSheet = lazy(() => import("./pages/CveSheet"));
 import "./styles.css";
 
 const queries = new QueryClient({
@@ -63,6 +64,7 @@ function Shell() {
           <Route path="/admin" element={<Admin />} />
           <Route path="/rapport" element={<Report />} />
           <Route path="/vulnerabilites" element={<Vulnerabilities />} />
+          <Route path="/vulnerabilites/cve/:key" element={<CveSheet />} />
           <Route path="*" element={<p className="empty">Page introuvable.</p>} />
         </Routes>
         </Suspense>

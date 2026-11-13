@@ -58,10 +58,15 @@ export interface Group { instance: string; path: string; projects: number; analy
 
 export interface Vulns { critical: number; high: number; medium: number; low: number; info: number; unknown: number }
 
-export interface VulnItem { key: string; cve: boolean; title: string; severity: keyof Vulns; projects: number; detected_at: string | null; overdue: number; priority: keyof Vulns; kev: boolean; epss: number | null; percentile: number | null }
-export interface VulnProject { instance: string; path: string; score: number | null; coverage: number | null; severity: keyof Vulns; type: string; detected_at: string | null; overdue: boolean; priority: keyof Vulns; kev: boolean; epss: number | null }
-/** Correction deadlines in hours by severity (critical, high, medium, low). */
-export type Sla = Partial<Record<keyof Vulns, number>>;
+/** SSVC response (D14): it sets the correction deadline (Immédiat, Hors cycle, Planifié; Différé has none). */
+export type Response = "immediate" | "out_of_cycle" | "scheduled" | "deferred";
+export interface VulnItem { key: string; cve: boolean; title: string; severity: keyof Vulns; projects: number; detected_at: string | null; overdue: number; priority: keyof Vulns; response: Response; kev: boolean; epss: number | null; percentile: number | null }
+// envs, trees, components: where Dependency-Track finds it (type dependency_track).
+export interface VulnProject { instance: string; path: string; score: number | null; coverage: number | null; severity: keyof Vulns; type: string; detected_at: string | null; overdue: boolean; priority: keyof Vulns; response: Response; kev: boolean; epss: number | null; envs?: string[] | null; trees?: string[] | null; components?: string[] | null }
+/** A project's open vulnerabilities, counted by priority, past their deadline and exploited (KEV). */
+export interface VulnByProject { instance: string; path: string; score: number | null; coverage: number | null; total: number; overdue: number; kev: number; by_priority: Partial<Record<keyof Vulns, number>>; by_response: Partial<Record<Response, number>> }
+/** Correction deadlines in hours by SSVC response (Différé has none). */
+export type Sla = Partial<Record<Response, number>>;
 /** One analysed branch of a project: its latest run and its latest successful score. */
 export interface BranchScore { branch: string; last_id: number; last_status: Run["status"]; last_at: string; run_id: number | null; score: number | null; coverage: number | null; finished_at: string | null; commit_sha: string | null }
 
@@ -79,10 +84,41 @@ export interface Summary { total: number; analysed: number; score: number | null
   practices: (Practices & { projects: number }) | null;
   vuln_coverage: Record<VulnCoverage, number>;
   // null: no project of the scope measured (GitLab without Ultimate).
-  vulns: (Vulns & { total: number; projects: number; exposed: { instance: string; path: string; vulns: Vulns }[]; sla_hours: Sla; overdue: Sla; by_priority: Sla; dated: number; kev: number }) | null;
-  feeds: Record<"kev" | "epss", Feed> }
+  vulns: (Vulns & { total: number; projects: number; exposed: { instance: string; path: string; vulns: Vulns }[]; sla_hours: Sla; overdue: Sla;
+    by_response: Record<Response, number>; by_priority: Partial<Record<keyof Vulns, number>>; dated: number; kev: number }) | null;
+  feeds: Record<"kev" | "epss", Feed>;
+  // Every CVE source and its last completed update: KEV and EPSS (Periskope), NVD, GitHub, OSV (Dependency-Track).
+  sources: Source[];
+  // Projects of the scope per environment, whatever ?env= asks: a project is counted under each topic it carries.
+  envs: Record<Env | "total", number> }
+export interface Source { name: string; completed_at: string | null; error: string | null; via: "periskope" | "dependency-track" }
+/** A Dependency-Track brick of a project: the version running in a tree (environment or delivered version). */
+export interface DtBrick { tree: string; env: string | null; uuid: string; version: string | null; sbom: boolean; by_tag: boolean; components: number | null; no_purl: number | null }
+export interface DtTree { uuid: string; name: string; env: string | null; active: boolean; synced_at: string; bricks: number; no_sbom: number; open: number; immediate: number }
+export interface DtTreeBrick { uuid: string; name: string; version: string | null; active: boolean; sbom: boolean; by_tag: boolean; components: number | null; no_purl: number | null; instance: string | null; path: string | null }
+export interface DtFinding { key: string; cve: boolean; title: string | null; severity: keyof Vulns; response: Response; kev: boolean; epss: number | null; where: string[] }
+export interface DtVersion { tree: Omit<DtTree, "bricks" | "no_sbom" | "open" | "immediate">; bricks: DtTreeBrick[]; findings: DtFinding[] }
+export interface DtCompare { a: DtVersion["tree"]; b: DtVersion["tree"]; bricks: { name: string; a: string | null; b: string | null }[]; only_a: DtFinding[]; only_b: DtFinding[]; both: DtFinding[] }
+/** Where a CVE stands, version by version, for its follow-up sheet. Status: open, not concerned (VEX), exception, resolved. */
+export interface DtPlace { tree_uuid: string; tree: string; env: string | null; tree_active: boolean; brick: string; version: string | null; active: boolean; instance: string | null; path: string | null;
+  component_name: string | null; component_version: string | null; title: string | null; severity: keyof Vulns; vector: string | null; kev: boolean; epss: number | null;
+  state: string | null; analysis_response: string | null; justification: string | null; detail: string | null; analysed_at: string | null; expires_on: string | null; attributed_at: string | null;
+  status: "open" | "not_concerned" | "exception" | "resolved"; response: Response }
+export interface CveSheet { key: string; places: DtPlace[]; fixed_in: { tree: string; env: string | null; tree_active: boolean; brick: string; version: string | null; active: boolean }[];
+  ledger: { instance: string; path: string; opened_at: string; closed_at: string | null; priority: string | null; response: Response | null; deadline_at: string | null }[] }
+export interface DtException { key: string; title: string | null; severity: keyof Vulns; kind: "exception" | "not_concerned"; state: string | null; justification: string | null; response: string | null;
+  detail: string | null; analysed_at: string | null; expires_on: string | null; expired: boolean | null; brick: string; version: string | null; tree: string; instance: string | null; path: string | null }
+type DtBrickRef = { uuid: string; name: string; version: string | null; components: number | null; no_purl: number | null; tree: string; instance: string | null; path: string | null };
+/** What Dependency-Track says needs doing in the scope (null fields when DT is not configured). */
+export interface DtWork { configured: boolean; synced_at?: string | null; no_sbom?: DtBrickRef[]; by_tag?: DtBrickRef[]; no_purl?: DtBrickRef[]; expired_exceptions?: number; stale_sources?: { name: string; completed_at: string | null; via: string }[] }
+/** The five indicators for management (D11), month by month from the ledger, and today's SBOM coverage and exceptions. */
+export interface Indicators { months: { month: string; critical_fixed: number; critical_on_time: number; days: Partial<Record<keyof Vulns, number | null>>; overdue_stock: number }[];
+  sbom: { bricks: number; with_sbom: number } | null; exceptions: { active: number; expired: number } | null }
 /** An exploitation feed read from the internal mirror: configured or not, last good read, last error. */
 export interface Feed { configured: boolean; fetched_at?: string | null; rows?: number | null; published?: string | null; error?: string | null }
+
+/** A project's environment is the GitLab topic prod, test or dev it carries; none: it carries none of them. */
+export type Env = "prod" | "test" | "dev" | "none";
 
 export interface ProjectRow {
   id: number;
@@ -101,6 +137,8 @@ export interface ProjectRow {
   vulns: Vulns | null;
   practices: Practices | null;
   vuln_coverage: VulnCoverage;
+  // GitLab topics, lower-cased.
+  topics: string[];
 }
 
 export interface CheckResult {
@@ -111,6 +149,8 @@ export interface CheckResult {
 }
 
 export interface Project extends ProjectRow {
+  // Dependency-Track bricks of the project, one per tree where it runs; null without DT.
+  dt?: DtBrick[] | null;
   can_launch: boolean;
   active_run: number | null;
   statuses: Record<string, { status: ActivityStatus; to_confirm: boolean }> | null;

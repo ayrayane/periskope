@@ -3,7 +3,10 @@ kind: Cluster
 metadata: { name: periskope-db }
 spec:
   instances: {{ .Values.postgres.instances }}
-  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  imageName: {{ .Values.image.postgres }}
+  {{- with .Values.image.pullSecret }}
+  imagePullSecrets: [{ name: {{ . }} }]
+  {{- end }}
   storage: { size: {{ .Values.postgres.storage }} }
   bootstrap: { initdb: { database: periskope, owner: periskope } }
   {{- if .Values.postgres.backup.enabled }}
