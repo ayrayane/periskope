@@ -77,7 +77,7 @@ export function ScopeEditor({ where, canEdit }: { where: Where; canEdit: boolean
       {rows.isError && <p className="error" role="alert">{(rows.error as Error).message}</p>}
       {rows.isLoading && <p className="page-status" role="status">Chargement…</p>}
       {rows.data && !visible.length && <p className="empty">Aucune preuve ni activité ne correspond au filtre.</p>}
-      {visible.length > 0 && <div className="table-scroll"><table>
+      {visible.length > 0 && <div className="table-scroll"><table aria-label="Preuves et activités">
         <thead>
           <tr>
             {canEdit && <th scope="col"><input type="checkbox" aria-label="Tout sélectionner" checked={allSelected}

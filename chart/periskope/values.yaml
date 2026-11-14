@@ -65,7 +65,7 @@ oidc:
 # With DT, dependency and image vulnerabilities come from DT alone; GitLab keeps SAST, secrets and DAST.
 dependencyTrack:
   url: ""                          # e.g. https://dtrack.internal (the API is under /api)
-  apiKeySecret: periskope-dtrack   # Secret with key apiKey (team permissions VIEW_PORTFOLIO, VIEW_VULNERABILITY)
+  apiKeySecret: periskope-dtrack   # Secret with key apiKey (team permissions VIEW_PORTFOLIO, VIEW_VULNERABILITY, SYSTEM_CONFIGURATION_READ)
   instance: ""                     # GitLab instance slug the brick names refer to; default the first instance
   sources: nvd,github,osv          # DT mirrors whose freshness is watched (older than 2 days: alert)
 

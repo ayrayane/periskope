@@ -67,7 +67,7 @@ export default function Report() {
 
       <section className="report-block">
         <h2>Répartition des scores</h2>
-        <table className="report-table">
+        <table aria-label="Répartition des scores" className="report-table">
           <thead><tr><th scope="col">Tranche</th><th scope="col">Projets</th><th scope="col">Part</th></tr></thead>
           <tbody>
             <tr><td>75 et plus</td><td>{s.high}</td><td>{pct(s.high)} %</td></tr>
@@ -83,7 +83,7 @@ export default function Report() {
         {!s.vulns ? <p>{NOT_MEASURED}</p> : (
           <>
             <p>{s.vulns.total} vulnérabilité{s.vulns.total > 1 ? "s" : ""} ouverte{s.vulns.total > 1 ? "s" : ""} sur la branche de référence de {s.vulns.projects} projet{s.vulns.projects > 1 ? "s" : ""} mesuré{s.vulns.projects > 1 ? "s" : ""}.</p>
-            <table className="report-table">
+            <table aria-label="Vulnérabilités ouvertes par sévérité" className="report-table">
               <thead><tr><th scope="col">Sévérité</th><th scope="col">Vulnérabilités</th></tr></thead>
               <tbody>
                 <tr><td>Critiques</td><td>{s.vulns.critical}</td></tr>
@@ -94,7 +94,7 @@ export default function Report() {
               </tbody>
             </table>
             {s.vulns.exposed.length > 0 && (
-              <table className="report-table">
+              <table aria-label="Projets les plus exposés" className="report-table">
                 <thead><tr><th scope="col">Projets les plus exposés</th><th scope="col">Instance</th><th scope="col">Critiques et hautes</th></tr></thead>
                 <tbody>{s.vulns.exposed.map((e) => <tr key={`${e.instance}/${e.path}`}><td>{e.path}</td><td>{instances.find((i) => i.slug === e.instance)?.name ?? e.instance}</td><td>{urgent(e.vulns)}</td></tr>)}</tbody>
               </table>
@@ -105,7 +105,7 @@ export default function Report() {
 
       <section className="report-block">
         <h2>Score moyen par dimension</h2>
-        <table className="report-table">
+        <table aria-label="Score moyen par dimension" className="report-table">
           <thead><tr><th scope="col">Dimension DSOMM</th><th scope="col">Score moyen</th></tr></thead>
           <tbody>{Object.entries(s.dimensions).sort().map(([d, v]) => <tr key={d}><td title={d}>{dimension(d)}</td><td>{Math.round(v)}/100</td></tr>)}</tbody>
         </table>
@@ -114,7 +114,7 @@ export default function Report() {
       <section className="report-block">
         <h2>Pratiques les plus souvent absentes ou partielles</h2>
         {s.gaps.length === 0 ? <p>Aucune.</p> : (
-          <table className="report-table">
+          <table aria-label="Pratiques les plus souvent absentes ou partielles" className="report-table">
             <thead><tr><th scope="col">Pratique</th><th scope="col">Niveau</th><th scope="col">Projets concernés</th></tr></thead>
             <tbody>{s.gaps.slice(0, 5).map((g) => <tr key={g.activity}><td title={g.activity}>{practice(g.activity)}</td><td>{g.level}</td><td>{g.missing} sur {g.measured} ({Math.round((100 * g.missing) / Math.max(1, g.measured))} %)</td></tr>)}</tbody>
           </table>
@@ -127,7 +127,7 @@ export default function Report() {
       <section className="report-block">
         <h2>Projets du périmètre</h2>
         {!projects.data ? <Skeleton lines={4} label="Chargement des projets…" /> : (
-          <table className="report-table">
+          <table aria-label="Projets du périmètre" className="report-table">
             <thead><tr><th scope="col">Projet</th><th scope="col">Instance</th><th scope="col">Score</th><th scope="col">Couverture</th><th scope="col">Dernière analyse réussie</th><th scope="col">État</th></tr></thead>
             <tbody>
               {projects.data.map((p) => (
@@ -171,7 +171,7 @@ function Kpis({ i }: { i: Indicators }) {
           <span>briques en prod avec un SBOM{i.sbom ? ` (${i.sbom.with_sbom} sur ${i.sbom.bricks})` : " (Dependency-Track non configuré)"}</span></div>
         <div><b className={i.exceptions?.expired ? "t-fail" : ""}>{i.exceptions ? i.exceptions.expired : "—"}</b><span>exceptions expirées, sur {i.exceptions ? i.exceptions.active + i.exceptions.expired : 0} acceptées</span></div>
       </section>
-      <table className="report-table">
+      <table aria-label="Indicateurs de suivi par mois" className="report-table">
         <thead><tr><th scope="col">Mois</th><th scope="col">Critiques corrigées dans les délais</th><th scope="col">Délai moyen (critique / élevée / moyenne)</th><th scope="col">Stock hors délai en fin de mois</th></tr></thead>
         <tbody>
           {i.months.map((m) => (

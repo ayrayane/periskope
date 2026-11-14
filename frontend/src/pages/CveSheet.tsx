@@ -36,7 +36,7 @@ export default function CveSheet() {
             <h2 id="places-title">Versions touchées {open.length > 0 ? <span className="badge tone-fail">{open.length} ouverte{open.length > 1 ? "s" : ""} en service</span> : <span className="badge tone-pass">aucune ouverte en service</span>}</h2>
             <p className="card-sub">Chaque version de brique où Dependency-Track trouve la CVE, avec sa réponse SSVC et la décision prise dans DT (fichier VEX du dépôt)</p>
             {q.data.places.length === 0 ? <p className="muted">Dependency-Track ne la trouve dans aucune version visible : elle vient de GitLab (voir l'historique).</p> : (
-              <table className="vuln-table">
+              <table aria-labelledby="places-title" className="vuln-table">
                 <thead><tr><th scope="col">Version</th><th scope="col">Brique</th><th scope="col">Composant</th><th scope="col">État</th><th scope="col">Réponse</th><th scope="col">Décision dans DT</th></tr></thead>
                 <tbody>
                   {q.data.places.map((p, i) => (
@@ -67,7 +67,7 @@ export default function CveSheet() {
               <h2 id="ledger-title">Historique par projet</h2>
               <p className="card-sub">Ouverture, échéance et clôture : une CVE est corrigée quand elle ne reste dans aucune version en service (D15)</p>
               {q.data.ledger.length === 0 ? <p className="muted">Pas encore d'historique.</p> : (
-                <table className="vuln-table">
+                <table aria-labelledby="ledger-title" className="vuln-table">
                   <thead><tr><th scope="col">Projet</th><th scope="col">Ouverte</th><th scope="col">Échéance</th><th scope="col">Fermée</th></tr></thead>
                   <tbody>
                     {q.data.ledger.map((l, i) => {

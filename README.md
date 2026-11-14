@@ -1,6 +1,6 @@
 # Periskope
 
-Periskope measures DSOMM evidence on GitLab projects without asking the teams anything: which of the 47 retained checks pass, which are missing and how to get them. Specification: the "Spécifications — Periskope" document.
+Periskope measures DSOMM evidence on GitLab projects without asking the teams anything: which of the 54 retained checks pass, which are missing and how to get them. Specification: the "Spécifications — Periskope" document.
 
 ## Layout
 
@@ -8,7 +8,7 @@ Periskope measures DSOMM evidence on GitLab projects without asking the teams an
 | --- | --- |
 | `packages/core` | Check catalogue, DSOMM 5.0.2 activities, scoring and scope rules (the only place they live) |
 | `packages/clients` | Async GitLab client: read-only, token file re-read on 401, per-instance quota |
-| `packages/checks` | The check registry and the 40 GitLab and repository checks (SonarQube in lot 2) |
+| `packages/checks` | The check registry and the 54 checks: GitLab, repository, SonarQube, Dependency-Track trees and the vulnerability ledger |
 | `packages/db` | PostgreSQL schema (Alembic), run lifecycle, `Viewer.where()` scope filter |
 | `services/collector` | ARQ worker for one GitLab instance: analyses, project sync, memberships |
 | `services/scheduler` | Webhook receiver and nightly tasks (sync 00:30, catch-up 01:00, rollup 05:00) |
@@ -104,8 +104,9 @@ priority is the severity.
 
 ## Dependency-Track
 
-With `dependencyTrack.url`, the scheduler reads DT every hour, read only (an API key whose team has VIEW_PORTFOLIO and
-VIEW_VULNERABILITY, Secret `periskope-dtrack`, key `apiKey`):
+With `dependencyTrack.url`, the scheduler reads DT every hour, read only (an API key whose team has VIEW_PORTFOLIO,
+VIEW_VULNERABILITY and SYSTEM_CONFIGURATION_READ, the last one to read when the CVE sources were last mirrored; Secret
+`periskope-dtrack`, key `apiKey`):
 
 - **Trees**: each root project with children. `CMS · prod|test|dev` is an environment (built by the GitOps job), any other root
   (`CMS · 5.2.0 (livraison JAR)`) a delivered version, counted as prod. Root projects without children (the bricks' « build »

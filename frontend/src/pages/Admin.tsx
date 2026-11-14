@@ -23,7 +23,7 @@ export default function Admin() {
     mutationFn: (id: number) => api(`/runs/${id}`, { method: "DELETE" }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["admin-overview"] }),
   });
-  if (overview.isError) return <p className="error" role="alert">{(overview.error as Error).message}</p>;
+  if (overview.isError) return <><h1 tabIndex={-1}>Administration</h1><p className="error" role="alert">{(overview.error as Error).message}</p></>;
   if (!overview.data) return <p className="page-status" role="status">Chargement…</p>;
   const o = overview.data;
 
@@ -34,7 +34,7 @@ export default function Admin() {
 
       <section className="group" aria-labelledby="a-instances">
         <h2 id="a-instances">Instances GitLab</h2>
-        <table>
+        <table aria-labelledby="a-instances">
           <thead><tr><th scope="col">Instance</th><th scope="col">Projets</th><th scope="col">Synchronisation</th><th scope="col">File</th><th scope="col">Collecteur</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {o.instances.map((i) => (
@@ -59,7 +59,7 @@ export default function Admin() {
         <section className="group" aria-labelledby="a-runs">
           <h2 id="a-runs">Analyses des dernières 24 h</h2>
           {!o.runs_24h.length ? <p className="muted">Aucune analyse.</p> : (
-            <table>
+            <table aria-labelledby="a-runs">
               <thead><tr><th scope="col">Statut</th><th scope="col">Déclencheur</th><th scope="col">Nombre</th><th scope="col">Réutilisées</th><th scope="col">Appels GitLab</th></tr></thead>
               <tbody>{o.runs_24h.map((r) => <tr key={r.status + r.trigger}><td>{STATUS[r.status] ?? r.status}</td><td>{TRIGGER[r.trigger] ?? r.trigger}</td><td>{r.n}</td><td>{r.reused}</td><td>{r.calls}</td></tr>)}</tbody>
             </table>
@@ -74,7 +74,7 @@ export default function Admin() {
         <section className="group" aria-labelledby="a-queue">
           <h2 id="a-queue">En file et en cours</h2>
           {!o.active.length ? <p className="muted">Rien en attente.</p> : (
-            <table>
+            <table aria-labelledby="a-queue">
               <thead><tr><th scope="col">Projet</th><th scope="col">Branche</th><th scope="col">Depuis</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {o.active.map((r) => (
@@ -165,7 +165,7 @@ function Excluded() {
       <h2 id="a-excluded">Projets exclus</h2>
       <p className="muted small">Exclus à la synchronisation (projets personnels, archivés, vides, namespaces exclus). Réintégrer un projet l'emporte sur la règle automatique.</p>
       {list.data && !list.data.items.length ? <p className="muted">Aucun projet exclu.</p> : (
-        <table>
+        <table aria-labelledby="a-excluded">
           <thead><tr><th scope="col">Projet</th><th scope="col">Motif</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {list.data?.items.map((p) => (
@@ -203,7 +203,7 @@ function Audit() {
         </select>
       </label>
       {log.data && !rows.length ? <p className="muted">Aucune entrée.</p> : (
-        <div className="table-scroll"><table>
+        <div className="table-scroll"><table aria-labelledby="a-audit">
           <thead><tr><th scope="col">Date</th><th scope="col">Auteur</th><th scope="col">Action</th><th scope="col">Cible</th><th scope="col">Détail</th></tr></thead>
           <tbody>
             {rows.map((r) => (

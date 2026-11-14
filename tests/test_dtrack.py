@@ -55,7 +55,8 @@ TRAILS = {"v-CVE-2099-0002": {"analysisState": "NOT_AFFECTED", "analysisJustific
                               "analysisDetails": "classe jamais chargée", "isSuppressed": True, "analysisComments": [{"timestamp": ms(NOW - timedelta(days=3))}]},
           "v-CVE-2099-0003": {"analysisState": "EXPLOITABLE", "analysisResponse": "WILL_NOT_FIX", "analysisDetails": "risque accepté, expire 2026-01-01",
                               "isSuppressed": True, "analysisComments": [{"timestamp": ms(NOW - timedelta(days=200))}]}}
-SOURCES = {"nvd": {"status": "COMPLETED", "completed_at": ms(NOW - timedelta(days=5))}, "github": {"status": "COMPLETED", "completed_at": ms(NOW)}}
+SOURCES = {"nvd": {"status": "COMPLETED", "completed_at": ms(NOW - timedelta(days=5))}, "github": {"status": "COMPLETED", "completed_at": ms(NOW)},
+           "osv": {"status": "FAILED", "completed_at": ms(NOW), "failure_reason": "miroir injoignable"}}   # never completed: no date, stale
 
 
 def fake_dt(findings=FINDINGS):
@@ -138,7 +139,7 @@ def test_trees_merge_and_access(dt_env, database_url):
     work = api.get("/api/v1/dt/work").json()
     assert [(w["path"], w["name"]) for w in work["no_sbom"]] == [("team-a/sub/lib", "lib")] and len(work["by_tag"]) == 1
     assert [(w["name"], w["no_purl"]) for w in work["no_purl"]] == [("team-a/app", 1)]
-    assert work["expired_exceptions"] == 1 and [s["name"] for s in work["stale_sources"]] == ["NVD"]
+    assert work["expired_exceptions"] == 1 and sorted(s["name"] for s in work["stale_sources"]) == ["NVD", "OSV"]
 
     # Versions, a comparison, a CVE's sheet: alice never sees « mystery », a brick no project of hers matches.
     trees = api.get("/api/v1/dt/versions").json()
@@ -210,7 +211,31 @@ def test_ledger_indicators_and_alerts(dt_env, database_url, monkeypatch, tmp_pat
         await pool.close()
         return [c.request.content.decode() for c in hook.calls]
     sent = asyncio.run(alerts())
-    assert len(sent) == 2   # second pass sends nothing again
+    assert len(sent) == 3   # second pass sends nothing again
     assert any("CVE-2099-7777" in s and "team-a/app" in s and "aucun référent" in s for s in sent)
-    assert any("NVD" in s and "plus à jour" in s for s in sent)
+    assert all(any(name in s and "plus à jour" in s for s in sent) for name in ("NVD", "OSV"))   # late, and never completed
     assert os.environ["PERISKOPE_DT_URL"] == "https://dt.test"
+
+
+def test_checks_read_the_stored_trees_and_ledger(dt_env, database_url, tmp_path):
+    """The checks without a source of their own judge what the collector loads for them: the project's versions in the trees and its ledger."""
+    from fake_gitlab import context, good
+    from periskope_checks import REGISTRY, run_all
+    from periskope_collector.analysis import tracking
+    from periskope_core.models import CheckStatus
+
+    async def scenario():
+        await setup(database_url)
+        pool = await connect(database_url)
+        app = await pool.fetchval("SELECT id FROM projects WHERE path = 'team-a/app'")
+        loaded = await tracking(pool, "gl", app), await tracking(pool, "another-gitlab", app)
+        await pool.close()
+        ids = [i for i in REGISTRY if i.startswith(("dt.", "ledger."))]
+        return [{i: o.status for i, o in (await run_all(context(good() | {"tracking": t}, tmp_path), ids)).items()} for t in loaded]
+    here, elsewhere = asyncio.run(scenario())
+    # 1.2 runs in prod and 1.1 in a delivery, both with their SBOM; test only ever saw 1.3; log4j is long past its deadline.
+    assert here == {"dt.sca": CheckStatus.PASS, "dt.prod_component": CheckStatus.PASS, "dt.prod_artifact": CheckStatus.PASS,
+                    "dt.prod_dependencies": CheckStatus.PASS, "dt.same_artifact": CheckStatus.FAIL,
+                    "ledger.sla": CheckStatus.FAIL, "ledger.fix_rate": CheckStatus.PASS}
+    # Dependency-Track follows no project of that instance: not measured, never a failure.
+    assert {elsewhere[i] for i in ("dt.prod_component", "dt.prod_artifact", "dt.prod_dependencies", "dt.same_artifact")} == {CheckStatus.UNKNOWN}

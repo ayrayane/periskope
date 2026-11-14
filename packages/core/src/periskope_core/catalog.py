@@ -1,4 +1,4 @@
-"""The 47 retained checks, from the spec table "Les 47 preuves retenues"."""
+"""The 54 retained checks, from the spec table "Les 54 preuves retenues"."""
 import json
 from importlib.resources import files
 
@@ -15,11 +15,14 @@ CHECKS: tuple[Check, ...] = (
     Check('gitlab.injection_open', 'Aucune injection SQL/commande ouverte', 'Rapport vuln.', 'Parametrization', 1, Kind.PROOF),
     Check('gitlab.secret_detection', 'Détection de secrets dans la CI', 'CI fusionnée', 'Test for stored secrets in code', 1, Kind.PROOF),
     Check('gitlab.image_secret_scan', 'Scan de secrets des images', 'CI fusionnée', 'Test for stored secrets in build artifacts', 1, Kind.HINT),
+    Check('dt.prod_component', 'Version en production suivie dans Dependency-Track', 'Dependency-Track', 'Inventory of production components', 1, Kind.PROOF),
     Check('sonar.false_positive', 'Faux positifs et hotspots triés', 'SonarQube', 'Simple false positive treatment', 1, Kind.PROOF),
     Check('sonar.security_gate', 'Quality gate avec condition de sécurité', 'SonarQube', 'Treatment of defects with high or critical severity', 1, Kind.HINT),
     Check('repo.lockfiles', 'Fichiers de verrouillage présents', 'Dépôt', 'Pinning of artifacts', 2, Kind.PROOF),
     Check('repo.pinning_images', 'Images de base épinglées (tag ou digest)', 'Dépôt', 'Pinning of artifacts', 2, Kind.PROOF),
-    Check('gitlab.sbom_artifact', 'Artefact CycloneDX produit par le pipeline', 'Artefacts', 'SBOM of components', 2, Kind.PROOF),
+    Check('gitlab.sbom_artifact', 'SBOM CycloneDX produit par le pipeline ou présent dans Dependency-Track', 'Artefacts', 'SBOM of components', 2, Kind.PROOF),
+    Check('dt.prod_artifact', 'Version de chaque brique en production connue', 'Dependency-Track', 'Inventory of production artifacts', 2, Kind.PROOF),
+    Check('dt.sca', 'Dépendances analysées (Dependency-Track ou Dependency Scanning)', 'Dependency-Track', 'Software Composition Analysis (server side)', 2, Kind.PROOF),
     Check('gitlab.masked_secrets', 'Variables sensibles masquées', 'API variables', 'Environment depending configuration parameters (secrets)', 2, Kind.PROOF),
     Check('gitlab.automerge', 'Merge automatique des MR de dépendances', 'API MR', 'Automated merge of automated PRs', 2, Kind.HINT),
     Check('gitlab.nightly_schedule', 'Pipeline planifié quotidien actif', 'API schedules', 'Nightly build of images (base images)', 2, Kind.PROOF),
@@ -46,8 +49,12 @@ CHECKS: tuple[Check, ...] = (
     Check('repo.security_integration_tests', "Tests d'intégration de sécurité", 'Dépôt', 'Security integration tests for important components', 3, Kind.HINT),
     Check('gitlab.sast', 'Analyse statique dans la CI', 'CI fusionnée', 'Static analysis for important server side components', 3, Kind.PROOF),
     Check('sonar.recent_analysis', 'Analyse SonarQube récente', 'SonarQube', 'Static analysis for important server side components', 3, Kind.PROOF),
+    Check('dt.prod_dependencies', 'SBOM de chaque version en production', 'Dependency-Track', 'Inventory of production dependencies', 3, Kind.PROOF),
+    Check('ledger.sla', 'Aucune vulnérabilité ouverte hors délai', 'Registre des vuln.', 'SLA per criticality', 3, Kind.PROOF),
+    Check('ledger.fix_rate', 'Taux de correction des vulnérabilités mesuré', 'Registre des vuln.', 'Fix rate per repo/product', 3, Kind.HINT),
     Check('repo.precommit_security', 'Hooks pre-commit de sécurité', 'Dépôt', 'Local development security checks performed', 3, Kind.HINT),
     Check('repo.gitignore', 'Fichier .gitignore présent', 'Dépôt', '.gitignore', 4, Kind.PROOF),
+    Check('dt.same_artifact', 'Version en production déjà déployée en test ou dev (même numéro de version)', 'Dependency-Track', 'Same artifact for environments', 4, Kind.HINT),
     Check('sonar.all_components', 'Lignes de code analysées', 'SonarQube', 'Static analysis for all components/libraries', 4, Kind.PROOF),
     Check('repo.precommit_lint', 'Linting local (pre-commit, editorconfig)', 'Dépôt', 'Local development linting & style checks performed', 5, Kind.HINT),
     Check('gitlab.dead_code', 'Détection de code mort', 'CI fusionnée', 'Dead code elimination', 5, Kind.HINT),

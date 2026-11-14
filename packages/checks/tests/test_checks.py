@@ -1,5 +1,6 @@
 """Every check passes on the good project, fails on a broken one and is unknown when its source is unreadable."""
 import json
+from datetime import UTC, datetime
 
 import pytest
 from fake_gitlab import context, good
@@ -94,6 +95,28 @@ def no_sonar_project(d):
     d["sonar"] = {}
 
 
+def both(*changes):
+    def apply(d):
+        for change in changes:
+            change(d)
+    return apply
+
+
+def track(**changes):
+    def apply(d):
+        d["tracking"].update(changes)
+    return apply
+
+
+def brick(i, **changes):
+    def apply(d):
+        d["tracking"]["bricks"][i].update(changes)
+    return apply
+
+
+no_bricks = track(bricks=[])
+
+
 # check id → (how to make it fail, how to make it unknown)
 CASES = {
     "gitlab.version_control": (set_(("project", "repository", "empty"), True), no_project),
@@ -105,7 +128,7 @@ CASES = {
     "gitlab.injection_open": (vuln("89"), artifacts("JUNIT")),
     "gitlab.secret_detection": (ci({"test": {"script": ["pytest"]}}), no_ci),
     "gitlab.image_secret_scan": (ci({"test": {"script": ["pytest"]}}), no_ci),
-    "gitlab.sbom_artifact": (artifacts("SAST"), no_project),
+    "gitlab.sbom_artifact": (both(artifacts("SAST"), no_bricks), both(no_project, no_bricks)),
     "gitlab.masked_secrets": (set_(("project", "ciVariables", "nodes", 0, "masked"), False), no_project),
     "gitlab.automerge": (lambda d: p(d)["mergeRequests"]["nodes"][0].update(autoMergeEnabled=False, mergeUser={"username": "alice", "bot": False}), no_project),
     "gitlab.nightly_schedule": (set_(("project", "pipelineSchedules", "nodes", 0, "cron"), "0 2 * * 1"), no_project),
@@ -115,7 +138,7 @@ CASES = {
     "gitlab.account_inventory": (set_(("access_tokens", 0, "expires_at"), None), set_(("access_tokens",), None)),
     "gitlab.least_privilege": (lambda d: [m["accessLevel"].update(integerValue=40) for m in p(d)["projectMembers"]["nodes"]] and None or
                                p(d)["projectMembers"]["nodes"].extend({"accessLevel": {"integerValue": 40}, "user": {"username": f"m{i}", "bot": False}} for i in range(3)), no_project),
-    "gitlab.vuln_layers": (artifacts("SAST", "JUNIT"), no_project),
+    "gitlab.vuln_layers": (both(artifacts("SAST", "JUNIT"), no_bricks), no_project),
     "gitlab.patch_mttr": (set_(("project", "mergeRequests", "nodes", 0, "createdAt"), "2026-08-01T00:00:00Z"), no_dep_mrs),
     "gitlab.tests_run": (no_suites, no_project),
     "gitlab.integration_suite": (set_(("project", "pipelines", "nodes", 0, "testReportSummary", "testSuites", "nodes", 1, "name"), "lint"), no_project),
@@ -144,6 +167,14 @@ CASES = {
     "sonar.recent_analysis": (set_(("sonar", "analyses", "analyses", 0, "date"), "2026-06-01T00:00:00+0000"), no_sonar_project),
     "sonar.all_components": (measure("ncloc", "0"), no_sonar_project),
     "sonar.duplication": (measure("duplicated_lines_density", "12.5"), no_sonar_project),
+    "dt.sca": (both(artifacts("SAST"), no_bricks), both(no_project, no_bricks)),
+    "dt.prod_component": (both(no_bricks, set_(("project", "topics"), ["prod"])), track(dt=False)),
+    "dt.prod_artifact": (brick(0, version=None), track(dt=False)),
+    "dt.prod_dependencies": (brick(0, sbom=False), set_(("tracking",), None)),
+    "dt.same_artifact": (brick(0, by_tag=True), brick(0, env=None)),
+    "ledger.sla": (set_(("tracking", "ledger", 1, "deadline_at"), datetime(2026, 10, 27, tzinfo=UTC)), track(followed=False)),
+    # A measurement: nothing makes it fail.
+    "ledger.fix_rate": (None, track(followed=False)),
 }
 
 
@@ -159,8 +190,8 @@ async def test_all_pass_on_good_project(tmp_path):
 async def test_good_project_stays_under_call_budget(tmp_path):
     ctx = context(good(), tmp_path)
     await run_all(ctx)
-    # GraphQL project + blobs, approvals, tokens, CI lint, tree: the spec's target is 5 on average, 15 at worst.
-    assert ctx.gl.calls <= 6
+    # GraphQL project + blobs + executed jobs, approvals, tokens, CI lint, tree: the spec's target is 5 on average, 15 at worst.
+    assert ctx.gl.calls <= 7
 
 
 async def test_sonar_absent_is_unknown_never_fail(tmp_path):
@@ -170,7 +201,7 @@ async def test_sonar_absent_is_unknown_never_fail(tmp_path):
     assert "non configuré" in outcomes["sonar.metrics"].message
 
 
-@pytest.mark.parametrize("check_id", sorted(CASES))
+@pytest.mark.parametrize("check_id", sorted(k for k, (f, _) in CASES.items() if f))
 async def test_fails(check_id, tmp_path):
     data = good()
     CASES[check_id][0](data)
@@ -272,3 +303,78 @@ async def test_cut_listing_never_concludes_absence(tmp_path, monkeypatch):
     msg = outcomes["repo.pinning_images"].message
     assert "aucun Dockerfile" in msg and "1 000 entrées lues" in msg and "la suite n'a pas été lue" in msg
     assert outcomes["repo.pinning_images"].evidence == {"entries_read": 1000, "files_read": 100, "truncated": True}
+
+
+SCANNERS = ["gitlab.secret_detection", "gitlab.image_secret_scan", "gitlab.dockerfile_lint", "gitlab.sast", "gitlab.dead_code"]
+
+
+@pytest.mark.parametrize(("change", "status", "said"), [
+    (set_(("ran",), ["test"]), CheckStatus.FAIL, "jamais exécuté"),
+    (both(set_(("ran",), ["test"]), set_(("cut",), True)), CheckStatus.UNKNOWN, "partie lue"),
+    (set_(("ran",), None), CheckStatus.UNKNOWN, "illisibles"),
+    # Parallel and matrix runs carry the declared job's name with a suffix; another job starting alike is not a run of it.
+    (set_(("ran",), ["semgrep-sast 1/2", "secret_detection: [api]", "container_scanning 2/2", "hadolint: [web]", "vulture 1/3"]), CheckStatus.PASS, "CI"),
+    (set_(("ran",), ["semgrep-sast-report", "secret_detection2", "container_scanning_old", "hadolint-fix", "vultures", "semgrep-sast:report", "hadolint report"]), CheckStatus.FAIL, "jamais exécuté"),
+])
+async def test_declared_scanner_must_have_run(change, status, said, tmp_path):
+    """A job in the CI file that is never played (manual, rules never met, skipped) proves nothing."""
+    data = good()
+    change(data)
+    outcomes = await run_all(context(data, tmp_path), SCANNERS)
+    assert {o.status for o in outcomes.values()} == {status}, {k: o.message for k, o in outcomes.items()}
+    assert all(said in o.message for o in outcomes.values())
+    # Only a declared job without a run may change at the same commit.
+    assert all(o.pending == (status != CheckStatus.PASS) for o in outcomes.values())
+
+
+async def test_sbom_in_dependency_track_counts_without_gitlab_report(tmp_path):
+    data = good()
+    artifacts("SAST", "DAST")(data)
+    outcomes = await run_all(context(data, tmp_path), ["gitlab.sbom_artifact", "gitlab.vuln_layers", "dt.sca"])
+    assert {o.status for o in outcomes.values()} == {CheckStatus.PASS}
+    assert "Dependency-Track" in outcomes["gitlab.sbom_artifact"].message and "Dependency-Track" in outcomes["dt.sca"].message
+    # A stopped version no longer counts: its SBOM describes nothing that runs.
+    brick(0, running=False)(data)
+    assert (await run_all(context(data, tmp_path), ["gitlab.sbom_artifact"]))["gitlab.sbom_artifact"].status == CheckStatus.FAIL
+
+
+INVENTORY = ["dt.prod_component", "dt.prod_artifact", "dt.prod_dependencies"]
+
+
+@pytest.mark.parametrize(("topics", "status"), [(["prod"], CheckStatus.FAIL), (["test", "python"], CheckStatus.NOT_APPLICABLE), (["python"], CheckStatus.UNKNOWN)])
+async def test_project_absent_from_production_trees_is_judged_on_its_topic(topics, status, tmp_path):
+    data = good()
+    both(no_bricks, set_(("project", "topics"), topics))(data)
+    outcomes = await run_all(context(data, tmp_path), INVENTORY)
+    assert {o.status for o in outcomes.values()} == {status}, {k: o.message for k, o in outcomes.items()}
+
+
+async def test_delivery_is_production_but_has_no_environment_to_compare(tmp_path):
+    data = good()
+    track(bricks=[{"tree": "CMS · 5.1.0 (livraison)", "env": None, "version": "1.1", "running": True, "by_tag": False, "sbom": True}])(data)
+    outcomes = await run_all(context(data, tmp_path), [*INVENTORY, "dt.same_artifact"])
+    assert [outcomes[i].status for i in INVENTORY] == [CheckStatus.PASS] * 3
+    assert outcomes["dt.same_artifact"].status == CheckStatus.UNKNOWN
+
+
+async def test_production_version_never_seen_in_test_fails(tmp_path):
+    data = good()
+    brick(0, version="1.3")(data)
+    outcome = (await run_all(context(data, tmp_path), ["dt.same_artifact"]))["dt.same_artifact"]
+    assert outcome.status == CheckStatus.FAIL and outcome.evidence == {"versions": ["CMS · prod : 1.3"]}
+
+
+async def test_ledger_measures(tmp_path):
+    data = good()
+    outcomes = await run_all(context(data, tmp_path), ["ledger.sla", "ledger.fix_rate"])
+    assert outcomes["ledger.fix_rate"].message == "taux de correction mesuré : 1 corrigée(s) en 90 jours, 1 ouverte(s) (50 %)"
+    # Late rows are counted by priority; a closed one, or one without deadline (deferred), is never late.
+    late = datetime(2026, 10, 1, tzinfo=UTC)
+    track(ledger=[{"priority": "critical", "opened_at": late, "closed_at": None, "deadline_at": late},
+                  {"priority": "critical", "opened_at": late, "closed_at": late, "deadline_at": late},
+                  {"priority": "low", "opened_at": late, "closed_at": None, "deadline_at": None}])(data)
+    outcome = (await run_all(context(data, tmp_path), ["ledger.sla"]))["ledger.sla"]
+    assert outcome.status == CheckStatus.FAIL and outcome.evidence == {"by_priority": {"critical": 1}}
+    track(ledger=[])(data)
+    outcomes = await run_all(context(data, tmp_path), ["ledger.sla", "ledger.fix_rate"])
+    assert (outcomes["ledger.sla"].status, outcomes["ledger.fix_rate"].status) == (CheckStatus.PASS, CheckStatus.NOT_APPLICABLE)

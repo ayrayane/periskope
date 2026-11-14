@@ -208,7 +208,8 @@ async def sources(db: asyncpg.Pool, dt: httpx.AsyncClient) -> None:
                              name, type(e).__name__)
             continue
         # The last completed run: a failed or running one keeps the previous date and says why.
+        done = ms(run.get("completed_at")) if run.get("status") == "COMPLETED" else None
         await db.execute(
             "INSERT INTO dt_sources (name, status, completed_at, error) VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO UPDATE SET status = $2,"
-            " completed_at = CASE WHEN $2 = 'COMPLETED' THEN $3 ELSE dt_sources.completed_at END, error = $4, read_at = now()",
-            name, run.get("status"), ms(run.get("completed_at")), run.get("failure_reason"))
+            " completed_at = COALESCE($3, dt_sources.completed_at), error = $4, read_at = now()",
+            name, run.get("status"), done, run.get("failure_reason"))

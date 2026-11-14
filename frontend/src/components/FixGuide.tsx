@@ -1,14 +1,15 @@
 // How to fix a check: numbered steps, a snippet to copy into the named file, and the official docs. Closed by default.
+// `about` names the check for screen readers, where a page repeats this button on every row.
 import { useState } from "react";
 import type { Fix } from "../api";
 
-export default function FixGuide({ fix, open = false }: { fix: Fix | null | undefined; open?: boolean }) {
+export default function FixGuide({ fix, about, open = false }: { fix: Fix | null | undefined; about?: string; open?: boolean }) {
   const [copied, setCopied] = useState(false);
   if (!fix) return null;
   const copy = () => navigator.clipboard?.writeText(fix.snippet!.code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
   return (
     <details className="fix" open={open}>
-      <summary>Comment corriger</summary>
+      <summary>Comment corriger{about && <span className="sr-only"> : {about}</span>}</summary>
       {fix.tier && <p className="fix-tier">Nécessite GitLab {fix.tier}</p>}
       <ol className="fix-steps">{fix.steps.map((s) => <li key={s}>{s}</li>)}</ol>
       {fix.snippet && (

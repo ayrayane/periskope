@@ -79,6 +79,21 @@ async def scope_for(db: asyncpg.Pool, instance: str, project_id: int) -> tuple[s
     return excluded(await scope.decisions_for(db, instance, project_id), instance, project_id)
 
 
+async def tracking(db: asyncpg.Pool, instance: str, project_id: int) -> dict[str, Any]:
+    """What Periskope already stores about the project, for the checks that read no source: its versions in the Dependency-Track
+    trees (stopped ones included) and its vulnerability ledger."""
+    bricks = await db.fetch(
+        "SELECT t.name AS tree, t.env, b.version, b.active AND t.active AS running, b.by_tag, b.bom_at IS NOT NULL AS sbom"
+        " FROM dt_projects b JOIN dt_projects t ON t.uuid = b.root WHERE b.kind = 'brick' AND b.project_id = $1", project_id)
+    return {
+        # Dependency-Track follows the instance once one of its bricks is matched to a project of the instance.
+        "dt": await db.fetchval("SELECT EXISTS (SELECT 1 FROM dt_projects d JOIN projects p ON p.id = d.project_id WHERE p.instance = $1)", instance),
+        "bricks": [dict(b) for b in bricks],
+        "followed": bool(await db.fetchval("SELECT vuln_findings IS NOT NULL FROM project_status WHERE project_id = $1", project_id)),
+        "ledger": [dict(r) for r in await db.fetch("SELECT priority, opened_at, closed_at, deadline_at FROM vuln_ledger WHERE project_id = $1", project_id)],
+    }
+
+
 async def analyse(db: asyncpg.Pool, gl: GitLab, run_id: int, *, enterprise: bool, sonar: SonarQube | None = None) -> None:
     run = await runs.claim(db, run_id)
     if run is None:
@@ -101,7 +116,8 @@ async def analyse(db: asyncpg.Pool, gl: GitLab, run_id: int, *, enterprise: bool
 
 
 async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise: bool, sonar: SonarQube | None, calls: list[int], log: Any) -> None:
-    ctx = Context(gl, run["path"], run["gitlab_id"], run["branch"], sha="", enterprise=enterprise, sonar=sonar, sonar_key=run["sonar_key"])
+    ctx = Context(gl, run["path"], run["gitlab_id"], run["branch"], sha="", enterprise=enterprise, sonar=sonar, sonar_key=run["sonar_key"],
+                  tracking=await tracking(db, run["instance"], run["project_id"]))
     project = await ctx.project()
     if project is None:
         raise SourceDown("projet introuvable ou illisible avec le jeton de service")
@@ -117,14 +133,16 @@ async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise
     if sonar_id and (prior_sonar := await runs.reusable_sonar(db, run["project_id"], sonar_id)):
         # Same SonarQube analysis as a previous run: its SonarQube checks stand.
         reuse |= {i: prior_sonar for i, r in REGISTRY.items() if r.depends_on == Depends.SONAR}
-    reused_ids = {i for i, source in reuse.items() if source["results"].get(i, {}).get("engine") == ENGINE_VERSION}
+    reused_ids = {i for i, source in reuse.items()
+                  if (r := source["results"].get(i, {})).get("engine") == ENGINE_VERSION and not r.get("pending")}
     outcomes = await run_all(ctx, [i for i in REGISTRY if i not in reused_ids])
     approvals, tokens = await ctx.approvals(), await ctx.access_tokens()
     s_hash = settings_hash(project, approvals, tokens)
 
     # The step to take travels with the result: the API never imports the checks.
     results: dict[str, Any] = {
-        i: {"status": o.status, "message": o.message, "engine": ENGINE_VERSION, **({"action": REGISTRY[i].action} if o.status != CheckStatus.PASS else {})}
+        i: {"status": o.status, "message": o.message, "engine": ENGINE_VERSION, **({"action": REGISTRY[i].action} if o.status != CheckStatus.PASS else {}),
+            **({"pending": True} if o.pending else {})}
         for i, o in outcomes.items()
     }
     for i in reused_ids:
@@ -132,7 +150,9 @@ async def _analyse(db: asyncpg.Pool, gl: GitLab, run: asyncpg.Record, enterprise
     excluded_checks, excluded_activities = await scope_for(db, run["instance"], run["project_id"])
     s = score({i: CheckStatus(r["status"]) for i, r in results.items()}, target_level=run["target_level"],
               excluded_checks=excluded_checks, excluded_activities=excluded_activities)
-    same = prior is not None and await db.fetchval(
+    # A result that was waiting for a pipeline and is judged again may have changed: this run becomes the reference.
+    rejudged = prior is not None and any(prior["results"].get(i, {}).get("pending") for i in outcomes)
+    same = prior is not None and not rejudged and await db.fetchval(
         "SELECT run_id FROM fingerprints WHERE project_id = $1 AND commit_sha = $2 AND settings_hash = $3 AND sonar_analysis_id IS NOT DISTINCT FROM $4",
         run["project_id"], commit, s_hash, sonar_id)
     await runs.succeed(

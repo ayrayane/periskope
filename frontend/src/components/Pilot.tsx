@@ -89,7 +89,7 @@ export function HeatmapCard({ instance, namespace, env, instances }: Scope & { i
       <h2 id="heat-title">Carte de chaleur</h2>
       <p className="card-sub">Score moyen {!instance ? "de chaque instance GitLab" : namespace ? "de chaque sous-groupe" : "de chaque groupe"} dans chaque dimension DSOMM. <span className="no-print">Cliquez un nom pour y descendre.</span></p>
       <div className="heat-scroll">
-        <table className="heat-table">
+        <table aria-labelledby="heat-title" className="heat-table">
           <thead><tr><th scope="col">{level}</th>{h.dimensions.map((d) => <th scope="col" key={d} title={d}>{dimension(d)}</th>)}</tr></thead>
           <tbody>
             {h.rows.map((r) => {

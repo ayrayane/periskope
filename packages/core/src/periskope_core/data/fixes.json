@@ -114,7 +114,8 @@
  "gitlab.secret_detection": {
   "steps": [
    "Inclure le template Secret-Detection dans .gitlab-ci.yml (disponible dans toutes les éditions).",
-   "Vérifier qu'un stage test existe : le job secret_detection s'y range."
+   "Vérifier qu'un stage test existe : le job secret_detection s'y range.",
+   "Vérifier que le job s'exécute : un job manuel, ignoré ou dont les règles ne sont jamais remplies ne compte pas."
   ],
   "snippet": {
    "file": ".gitlab-ci.yml",
@@ -131,7 +132,8 @@
  "gitlab.image_secret_scan": {
   "steps": [
    "Ajouter un job qui scanne l'image construite à la recherche de secrets.",
-   "Faire échouer le job si un secret est trouvé (--exit-code 1)."
+   "Faire échouer le job si un secret est trouvé (--exit-code 1).",
+   "Vérifier que le job s'exécute : un job manuel, ignoré ou dont les règles ne sont jamais remplies ne compte pas."
   ],
   "snippet": {
    "file": ".gitlab-ci.yml",
@@ -152,7 +154,8 @@
  "gitlab.sbom_artifact": {
   "steps": [
    "Générer un SBOM CycloneDX dans la CI.",
-   "Le publier comme rapport cyclonedx : GitLab l'attache au pipeline."
+   "Le publier comme rapport cyclonedx : GitLab l'attache au pipeline.",
+   "Ou envoyer le SBOM de la version à Dependency-Track : une brique en service avec son SBOM suffit."
   ],
   "snippet": {
    "file": ".gitlab-ci.yml",
@@ -163,6 +166,10 @@
    {
     "title": "Rapports d'artefacts : cyclonedx",
     "url": "https://docs.gitlab.com/ci/yaml/artifacts_reports/"
+   },
+   {
+    "title": "Dependency-Track : envoyer un SBOM depuis la CI",
+    "url": "https://docs.dependencytrack.org/usage/cicd/"
    }
   ]
  },
@@ -283,7 +290,8 @@
  "gitlab.vuln_layers": {
   "steps": [
    "Couvrir au moins deux couches : code (SAST), dépendances, conteneurs ou application (DAST).",
-   "Le plus simple : SAST et scan de conteneurs, disponibles dans toutes les éditions."
+   "Le plus simple : SAST et scan de conteneurs, disponibles dans toutes les éditions.",
+   "Un SBOM dans Dependency-Track compte pour la couche dépendances."
   ],
   "snippet": {
    "file": ".gitlab-ci.yml",
@@ -359,7 +367,8 @@
  "gitlab.dockerfile_lint": {
   "steps": [
    "Inclure l'analyse IaC (KICS), qui couvre aussi les Dockerfile.",
-   "Ou ajouter un job hadolint sur chaque Dockerfile."
+   "Ou ajouter un job hadolint sur chaque Dockerfile.",
+   "Vérifier que le job s'exécute : un job manuel, ignoré ou dont les règles ne sont jamais remplies ne compte pas."
   ],
   "snippet": {
    "file": ".gitlab-ci.yml",
@@ -459,7 +468,8 @@
  "gitlab.sast": {
   "steps": [
    "Inclure le template SAST (disponible dans toutes les éditions).",
-   "Les analyseurs sont choisis selon les langages du dépôt."
+   "Les analyseurs sont choisis selon les langages du dépôt.",
+   "Vérifier que le job s'exécute : un job manuel, ignoré ou dont les règles ne sont jamais remplies ne compte pas."
   ],
   "snippet": {
    "file": ".gitlab-ci.yml",
@@ -476,7 +486,8 @@
  "gitlab.dead_code": {
   "steps": [
    "Ajouter un détecteur de code mort adapté au langage.",
-   "Le lancer en CI ; commencer en allow_failure le temps de nettoyer."
+   "Le lancer en CI ; commencer en allow_failure le temps de nettoyer.",
+   "Vérifier que le job s'exécute : un job manuel, ignoré ou dont les règles ne sont jamais remplies ne compte pas."
   ],
   "snippet": {
    "file": ".gitlab-ci.yml",
@@ -729,6 +740,104 @@
    {
     "title": "SonarQube : métriques",
     "url": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/code-metrics/metrics-definition/"
+   }
+  ]
+ },
+ "dt.sca": {
+  "steps": [
+   "Envoyer le SBOM de chaque version à Dependency-Track : il analyse ses composants en continu.",
+   "À défaut, activer Dependency Scanning dans la CI (GitLab Ultimate)."
+  ],
+  "docs": [
+   {
+    "title": "Dependency-Track : envoyer un SBOM depuis la CI",
+    "url": "https://docs.dependencytrack.org/usage/cicd/"
+   },
+   {
+    "title": "Scan de dépendances",
+    "url": "https://docs.gitlab.com/user/application_security/dependency_scanning/"
+   }
+  ]
+ },
+ "dt.prod_component": {
+  "steps": [
+   "Faire déclarer le projet par le job GitOps dans l'arbre « prod » de Dependency-Track, ou dans l'arbre de la version livrée.",
+   "La brique porte le chemin GitLab du projet : c'est ainsi que Periskope la relie.",
+   "Si le projet ne va pas en production, poser le topic GitLab test ou dev : la preuve ne s'applique plus."
+  ],
+  "docs": [
+   {
+    "title": "Dependency-Track : bonnes pratiques",
+    "url": "https://docs.dependencytrack.org/best-practices/"
+   }
+  ]
+ },
+ "dt.prod_artifact": {
+  "steps": [
+   "Renseigner la version de chaque brique à l'envoi de son SBOM (projectVersion).",
+   "Une brique sans version ne dit pas ce qui tourne en production."
+  ],
+  "docs": [
+   {
+    "title": "Dependency-Track : envoyer un SBOM depuis la CI",
+    "url": "https://docs.dependencytrack.org/usage/cicd/"
+   }
+  ]
+ },
+ "dt.prod_dependencies": {
+  "steps": [
+   "Générer le SBOM CycloneDX de chaque version dans la CI.",
+   "L'envoyer à Dependency-Track pour la brique en production : sans SBOM, ses dépendances sont inconnues."
+  ],
+  "docs": [
+   {
+    "title": "Dependency-Track : envoyer un SBOM depuis la CI",
+    "url": "https://docs.dependencytrack.org/usage/cicd/"
+   }
+  ]
+ },
+ "dt.same_artifact": {
+  "steps": [
+   "Déployer d'abord la version en test ou en dev, puis la même version en production.",
+   "Référencer l'image par son digest (image@sha256:…) et non par un tag : un tag peut désigner une autre image.",
+   "Periskope compare les versions déclarées dans Dependency-Track, pas les digests : la pratique reste à confirmer."
+  ],
+  "docs": [
+   {
+    "title": "Kubernetes : images et digests",
+    "url": "https://kubernetes.io/docs/concepts/containers/images/"
+   }
+  ]
+ },
+ "ledger.sla": {
+  "steps": [
+   "Ouvrir l'onglet Vulnérabilités du projet : les vulnérabilités hors délai y sont marquées.",
+   "Les corriger, ou les traiter dans Dependency-Track ou GitLab : non concernée, faux positif, ou exception datée."
+  ],
+  "docs": [
+   {
+    "title": "Dependency-Track : états d'analyse",
+    "url": "https://docs.dependencytrack.org/triage/analysis-states/"
+   },
+   {
+    "title": "Rapport de vulnérabilités GitLab",
+    "url": "https://docs.gitlab.com/user/application_security/vulnerability_report/"
+   }
+  ]
+ },
+ "ledger.fix_rate": {
+  "steps": [
+   "Faire mesurer les vulnérabilités du projet : SBOM dans Dependency-Track, ou rapports de sécurité GitLab.",
+   "Periskope calcule alors le taux de correction sur 90 jours ; il le mesure sans le juger, les délais relèvent de « Aucune vulnérabilité ouverte hors délai »."
+  ],
+  "docs": [
+   {
+    "title": "Dependency-Track : envoyer un SBOM depuis la CI",
+    "url": "https://docs.dependencytrack.org/usage/cicd/"
+   },
+   {
+    "title": "Scan de dépendances",
+    "url": "https://docs.gitlab.com/user/application_security/dependency_scanning/"
    }
   ]
  }

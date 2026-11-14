@@ -84,7 +84,7 @@ export function PracticeCounts({ p, onMissing }: { p: Practices; onMissing?: () 
 export function PracticeCell({ p }: { p: Practices | null }) {
   if (!p) return <span className="muted small">—</span>;
   return (
-    <span className="practice-cell" title={`${p.done} en place, ${p.partial} partielles, ${p.missing} absentes, ${p.unknown} non vérifiées`}>
+    <span className="practice-cell" title={`${p.done} en place, ${p.partial} ${plural(p.partial, "partielle")}, ${p.missing} ${plural(p.missing, "absente")}, ${p.unknown} ${plural(p.unknown, "non vérifiée")}`}>
       <strong className={p.missing ? "tone-text-fail" : "tone-text-pass"}>{p.missing}</strong> {plural(p.missing, "absente")}
       <span className="muted small"> sur {p.counted}{p.partial > 0 && ` · ${p.partial} ${plural(p.partial, "partielle")}`}</span>
     </span>

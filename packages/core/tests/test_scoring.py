@@ -10,8 +10,8 @@ H = lambda i: Check(i, "", "", "x", 1, Kind.HINT)
 
 
 def test_catalog_matches_spec():
-    assert len(CHECKS) == 47 and len(ACTIVITIES) == 41
-    assert len({c.id for c in CHECKS}) == 47
+    assert len(CHECKS) == 54 and len(ACTIVITIES) == 48
+    assert len({c.id for c in CHECKS}) == 54
 
 
 def test_activity_rules():

@@ -45,7 +45,7 @@ export default function FixIt({ url, instance, check, kind }: { url: string; ins
         <div className="fixit-preview">
           <p><strong>{p.summary}</strong></p>
           {p.changes && (
-            <table className="t-fixed">
+            <table aria-label="Modifications proposées" className="t-fixed">
               <thead><tr><th scope="col">Réglage</th><th scope="col">Avant</th><th scope="col">Après</th></tr></thead>
               <tbody>{p.changes.map((c) => <tr key={c.what}><td>{c.what}</td><td>{c.before}</td><td>{c.after}</td></tr>)}</tbody>
             </table>

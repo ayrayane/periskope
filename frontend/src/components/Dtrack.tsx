@@ -28,7 +28,7 @@ export function Versions() {
         <h2 id="versions-title">Versions suivies dans Dependency-Track</h2>
         <p className="card-sub">Un arbre par environnement (job GitOps) et un par version livrée en JAR. Les versions qui ne tournent plus restent consultables toute leur durée de service.</p>
         {list.length === 0 ? <p className="muted">Aucun arbre dans Dependency-Track pour les projets que vous voyez.</p> : (
-          <table className="vuln-table">
+          <table aria-labelledby="versions-title" className="vuln-table">
             <thead><tr><th scope="col">Version</th><th scope="col">Type</th><th scope="col" className="num">Briques</th><th scope="col" className="num">Sans SBOM</th>
               <th scope="col" className="num">CVE ouvertes</th><th scope="col" className="num">Immédiat</th><th scope="col">Comparer</th></tr></thead>
             <tbody>
@@ -57,7 +57,7 @@ export function Versions() {
 function Findings({ items, empty }: { items: DtFinding[]; empty: string }) {
   if (items.length === 0) return <p className="muted">{empty}</p>;
   return (
-    <table className="vuln-table">
+    <table aria-label="Vulnérabilités" className="vuln-table">
       <thead><tr><th scope="col">CVE</th><th scope="col">Sévérité</th><th scope="col">Réponse</th><th scope="col">Où</th></tr></thead>
       <tbody>
         {items.map((f) => (
@@ -121,7 +121,7 @@ type BrickRow = Pick<DtBrick, "version" | "sbom" | "by_tag" | "components" | "no
 /** Bricks with their SBOM state: missing, deployed by tag, components without purl (DT matches them to no CVE). */
 export function Bricks({ rows, first = "Brique" }: { rows: BrickRow[]; first?: string }) {
   return (
-    <table className="vuln-table">
+    <table aria-label="Briques et leur SBOM" className="vuln-table">
       <thead><tr><th scope="col">{first}</th><th scope="col">Version</th><th scope="col">SBOM</th><th scope="col" className="num">Composants</th><th scope="col" className="num">Sans purl</th></tr></thead>
       <tbody>
         {rows.map((b, i) => (
@@ -170,7 +170,7 @@ export function Exceptions({ qs }: { qs: URLSearchParams }) {
         <h2 id="exc-title">{exceptions.length} exception{exceptions.length > 1 ? "s" : ""} {expired > 0 && <span className="badge tone-fail">{expired} expirée{expired > 1 ? "s" : ""}</span>}</h2>
         <p className="card-sub">Risques acceptés par le référent et le RSSI (fichier VEX du dépôt, envoyé à DT), 90 jours au plus sans échéance écrite</p>
         {exceptions.length === 0 ? <p className="muted">Aucune exception.</p> : (
-          <table className="vuln-table">
+          <table aria-labelledby="exc-title" className="vuln-table">
             <thead><tr><th scope="col">CVE</th><th scope="col">Brique</th><th scope="col">Échéance</th><th scope="col">Motif</th></tr></thead>
             <tbody>
               {exceptions.map((e, i) => (
@@ -189,7 +189,7 @@ export function Exceptions({ qs }: { qs: URLSearchParams }) {
         <h2 id="vex-title">{not_concerned.length} CVE non concernée{not_concerned.length > 1 ? "s" : ""} (VEX)</h2>
         <p className="card-sub">Déclarées sans effet sur la brique, revues à chaque version dans la MR qui change le fichier VEX</p>
         {not_concerned.length === 0 ? <p className="muted">Aucune.</p> : (
-          <table className="vuln-table">
+          <table aria-labelledby="vex-title" className="vuln-table">
             <thead><tr><th scope="col">CVE</th><th scope="col">Brique</th><th scope="col">Justification</th><th scope="col">Décidée le</th></tr></thead>
             <tbody>
               {not_concerned.map((e, i) => (

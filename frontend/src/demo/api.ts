@@ -32,7 +32,8 @@ export const INSTANCES = SITES.map((c, k) => ({
 const MESSAGES: Record<Status, (c: Check) => string> = {
   pass: (c) => `constaté : ${c.title.charAt(0).toLowerCase() + c.title.slice(1)}`,
   fail: (c) => `non constaté : ${/^.[a-zà-ÿ]/.test(c.title) ? c.title.charAt(0).toLowerCase() + c.title.slice(1) : c.title}`,
-  unknown: (c) => (c.source === "SonarQube" ? "SonarQube non configuré pour cette instance" : "source indisponible lors de l'analyse"),
+  unknown: (c) => (c.source === "SonarQube" ? "SonarQube non configuré pour cette instance"
+    : c.source === "Dependency-Track" ? "Dependency-Track non relié à cette instance" : "source indisponible lors de l'analyse"),
   not_applicable: () => "sans objet pour ce projet",
 };
 

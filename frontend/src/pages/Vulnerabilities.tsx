@@ -145,7 +145,7 @@ export default function Vulnerabilities() {
           <section className="card" aria-labelledby="vuln-list-title">
             <h2 id="vuln-list-title">{items.length}{items.length === 1000 ? "+" : ""} vulnérabilité{items.length > 1 ? "s" : ""}</h2>
             {items.length === 0 ? <p className="muted">Aucune vulnérabilité ouverte ne correspond.</p> : (
-              <table className="vuln-table">
+              <table aria-labelledby="vuln-list-title" className="vuln-table">
                 <thead><tr><th scope="col">Identifiant</th><th scope="col">Sévérité</th><th scope="col">Priorité et réponse</th><th scope="col">Ouverte depuis</th><th scope="col" className="num">Projets</th></tr></thead>
                 <tbody>
                   {items.map((v) => (
@@ -180,7 +180,7 @@ export default function Vulnerabilities() {
                 {projects.data && (
                   <>
                     <h3 className="vulns-sub">{projects.data.length} projet{projects.data.length > 1 ? "s" : ""} touché{projects.data.length > 1 ? "s" : ""}</h3>
-                    <table className="vuln-table">
+                    <table aria-label="Projets touchés" className="vuln-table">
                       <thead><tr><th scope="col">Projet</th><th scope="col">Détectée par</th><th scope="col">Réponse</th><th scope="col">Ouverte depuis</th><th scope="col">Score</th></tr></thead>
                       <tbody>
                         {projects.data.map((p) => (
@@ -233,7 +233,7 @@ function ByProject({ qs, sla, name }: { qs: URLSearchParams; sla?: Sla; name: (s
       <p className="card-sub">Vulnérabilités ouvertes par priorité (sévérité corrigée par KEV et EPSS) et à traiter en réponse Immédiat ;
         hors délai selon la réponse SSVC{sla ? ` (${RESPONSES.filter(([k]) => sla[k]).map(([k, l]) => `${l.toLowerCase()} ${span(sla[k]!)}`).join(", ")})` : ""}</p>
       {rows.length === 0 ? <p className="muted">Aucun projet avec une vulnérabilité ouverte.</p> : (
-        <table className="vuln-table">
+        <table aria-labelledby="by-project-title" className="vuln-table">
           <thead><tr><th scope="col">Projet</th>{PRIORITY_COLS.map(([k, l]) => <th key={k} scope="col" className="num">{l}</th>)}
             <th scope="col" className="num">Immédiat</th><th scope="col" className="num">Hors délai</th><th scope="col" className="num">Exploitées (KEV)</th><th scope="col" className="num">Total</th><th scope="col">Score</th></tr></thead>
           <tbody>
@@ -320,7 +320,7 @@ function Deadlines({ v, feeds, sources }: { v: NonNullable<Summary["vulns"]>; fe
   return (
     <div className="deadlines">
       <h3 className="vulns-sub">Délais de correction par réponse SSVC <span className="muted small">{late} hors délai{v.kev ? ` · ${v.kev} exploitée${v.kev > 1 ? "s" : ""} (KEV)` : ""}</span></h3>
-      <table className="vuln-table">
+      <table aria-label="Délais de correction par réponse SSVC" className="vuln-table">
         <thead><tr><th scope="col">Réponse</th><th scope="col">Délai</th><th scope="col" className="num">Ouvertes</th><th scope="col" className="num">Hors délai</th></tr></thead>
         <tbody>
           {RESPONSES.map(([k, , why]) => (

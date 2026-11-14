@@ -34,6 +34,8 @@ class Outcome(BaseModel):
     message: str
     # What was observed, kept as the run's raw evidence (never a token or file content).
     evidence: dict[str, Any] = Field(default_factory=dict)
+    # May change without a new commit (a pipeline still running): a later run at the same commit looks again.
+    pending: bool = False
 
     @classmethod
     def ok(cls, message: str, **evidence: Any) -> Outcome:

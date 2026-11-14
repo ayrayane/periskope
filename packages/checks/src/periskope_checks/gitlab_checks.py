@@ -28,6 +28,30 @@ async def ci_match(ctx: Context, pattern: str) -> list[str] | None:
     return [name for name, job in jobs.items() if rx.search(name) or rx.search(str(job.get("extends", ""))) or rx.search(str(job.get("image", ""))) or rx.search(str(job.get("script", "")))]
 
 
+async def ci_ran(ctx: Context, pattern: str, ok: str, absent: str) -> Outcome:
+    """A scanner counts when its job is declared and really ran in the last pipelines: a job that rules, a manual start
+    or an earlier failure always skip proves nothing. A failed scanner job ran (it may fail because it found something)."""
+    jobs = await ci_match(ctx, pattern)
+    if jobs is None:
+        return Outcome.unknown("CI illisible")
+    if not jobs:
+        return Outcome.fail(absent)
+    ran = await ctx.ran_jobs()
+    if ran is None:
+        out = Outcome.unknown("jobs des pipelines illisibles", jobs=jobs)
+    else:
+        names, cut = ran
+        # « job 1/3 » (parallel) and « job: [a, b] » (matrix) are runs of « job ».
+        done = [j for j in jobs if any(re.fullmatch(re.escape(j) + r"( \d+/\d+|: \[.*\])?", n) for n in names)]
+        if done:
+            return Outcome.ok(ok, jobs=done)
+        out = (Outcome.unknown("job déclaré, exécution non retrouvée dans la partie lue des pipelines", jobs=jobs) if cut
+               else Outcome.fail("job déclaré mais jamais exécuté dans les derniers pipelines", jobs=jobs))
+    # The first pipeline of a new job may still be running: the next run looks again, even at the same commit.
+    out.pending = True
+    return out
+
+
 async def dependency_mrs(ctx: Context) -> list[dict] | None:
     mrs = await ctx.merged_mrs()
     if mrs is None:
@@ -111,24 +135,21 @@ async def injection_open(ctx: Context) -> Outcome:
     return await open_vulns(ctx, {"CWE-89", "CWE-78", "CWE-77"}, {"sast", "dast"})
 
 
-@check("gitlab.secret_detection", Depends.COMMIT, "Inclure le template ou le composant Secret-Detection dans la CI.")
+@check("gitlab.secret_detection", Depends.COMMIT, "Inclure le template ou le composant Secret-Detection dans la CI, et vérifier que son job s'exécute.")
 async def secret_detection(ctx: Context) -> Outcome:
-    jobs = await ci_match(ctx, r"secret[_-]detection|gitleaks|trufflehog|detect-secrets")
-    if jobs is None:
-        return Outcome.unknown("CI illisible")
-    return Outcome.ok("détection de secrets dans la CI", jobs=jobs) if jobs else Outcome.fail("aucun job de détection de secrets")
+    return await ci_ran(ctx, r"secret[_-]detection|gitleaks|trufflehog|detect-secrets",
+                        "détection de secrets exécutée dans la CI", "aucun job de détection de secrets")
 
 
-@check("gitlab.image_secret_scan", Depends.COMMIT, "Scanner les images construites à la recherche de secrets oubliés.")
+@check("gitlab.image_secret_scan", Depends.COMMIT, "Scanner les images construites à la recherche de secrets oubliés, et vérifier que le job s'exécute.")
 async def image_secret_scan(ctx: Context) -> Outcome:
-    jobs = await ci_match(ctx, r"container[_-]scanning|trivy")
-    if jobs is None:
-        return Outcome.unknown("CI illisible")
-    return Outcome.ok("scan d'images présent dans la CI", jobs=jobs) if jobs else Outcome.fail("aucun scan des images construites")
+    return await ci_ran(ctx, r"container[_-]scanning|trivy", "scan d'images exécuté dans la CI", "aucun scan des images construites")
 
 
-@check("gitlab.sbom_artifact", Depends.LIVE, "Publier un rapport CycloneDX dans les artefacts du pipeline (artifacts:reports:cyclonedx).")
+@check("gitlab.sbom_artifact", Depends.LIVE, "Publier un rapport CycloneDX dans les artefacts du pipeline (artifacts:reports:cyclonedx), ou envoyer le SBOM à Dependency-Track.")
 async def sbom_artifact(ctx: Context) -> Outcome:
+    if sboms := ctx.dt_sboms():
+        return Outcome.ok("SBOM présent dans Dependency-Track", versions=sboms)
     types = await ctx.artifact_types()
     if types is None:
         return Outcome.unknown("artefacts illisibles")
@@ -238,7 +259,8 @@ async def vuln_layers(ctx: Context) -> Outcome:
     types = await ctx.artifact_types()
     if types is None:
         return Outcome.unknown("artefacts illisibles")
-    layers = sorted(types & {"sast", "dependency_scanning", "container_scanning", "dast"})
+    # Dependency-Track analysing the project's SBOM is the dependency layer, as GitLab's dependency scanning.
+    layers = sorted(types & {"sast", "dependency_scanning", "container_scanning", "dast"} | ({"dependency_scanning"} if ctx.dt_sboms() else set()))
     if len(layers) >= 2:
         return Outcome.ok(f"{len(layers)} couches mesurées", layers=layers)
     return Outcome.fail("moins de deux couches scannées", layers=layers)
@@ -286,17 +308,14 @@ async def integration_suite(ctx: Context) -> Outcome:
     return Outcome.ok("suite d'intégration publiée", suites=found) if found else Outcome.fail("aucune suite d'intégration dans le rapport de tests")
 
 
-@check("gitlab.dockerfile_lint", Depends.COMMIT, "Ajouter hadolint ou l'analyse IaC (KICS) à la CI.")
+@check("gitlab.dockerfile_lint", Depends.COMMIT, "Ajouter hadolint ou l'analyse IaC (KICS) à la CI, et vérifier que le job s'exécute.")
 async def dockerfile_lint(ctx: Context) -> Outcome:
     dockerfiles = await ctx.find(r"(^|/)(Docker|Container)file[^/]*$")
     if dockerfiles is None:
         return Outcome.unknown("arborescence illisible")
     if not dockerfiles:
         return await ctx.partial("aucun Dockerfile") or Outcome.not_applicable("aucun Dockerfile")
-    jobs = await ci_match(ctx, r"hadolint|kics|iac[_-]sast|trivy.*config")
-    if jobs is None:
-        return Outcome.unknown("CI illisible")
-    return Outcome.ok("Dockerfile analysés", jobs=jobs) if jobs else Outcome.fail(f"{len(dockerfiles)} Dockerfile non analysés")
+    return await ci_ran(ctx, r"hadolint|kics|iac[_-]sast|trivy.*config", "Dockerfile analysés dans la CI", f"{len(dockerfiles)} Dockerfile non analysés")
 
 
 @check("gitlab.secure_headers", Depends.LIVE, "Lancer le DAST et corriger les alertes d'en-têtes de sécurité.")
@@ -369,17 +388,13 @@ async def approved_mrs(ctx: Context) -> Outcome:
     return out(f"{len(ok)}/{len(humans)} MR approuvées par un tiers", share=round(share, 2))
 
 
-@check("gitlab.sast", Depends.COMMIT, "Inclure le template ou le composant SAST dans la CI.")
+@check("gitlab.sast", Depends.COMMIT, "Inclure le template ou le composant SAST dans la CI, et vérifier que son job s'exécute.")
 async def sast(ctx: Context) -> Outcome:
-    jobs = await ci_match(ctx, r"(^|[-_])sast($|[-_])|semgrep|sonar|bandit|gosec|spotbugs|codeql")
-    if jobs is None:
-        return Outcome.unknown("CI illisible")
-    return Outcome.ok("analyse statique dans la CI", jobs=jobs) if jobs else Outcome.fail("aucune analyse statique dans la CI")
+    return await ci_ran(ctx, r"(^|[-_])sast($|[-_])|semgrep|sonar|bandit|gosec|spotbugs|codeql",
+                        "analyse statique exécutée dans la CI", "aucune analyse statique dans la CI")
 
 
-@check("gitlab.dead_code", Depends.COMMIT, "Ajouter un détecteur de code mort à la CI (vulture, knip, deadcode…).")
+@check("gitlab.dead_code", Depends.COMMIT, "Ajouter un détecteur de code mort à la CI (vulture, knip, deadcode…), et vérifier que le job s'exécute.")
 async def dead_code(ctx: Context) -> Outcome:
-    jobs = await ci_match(ctx, r"vulture|knip|ts-prune|deadcode|unused|dead[_-]code")
-    if jobs is None:
-        return Outcome.unknown("CI illisible")
-    return Outcome.ok("détection de code mort dans la CI", jobs=jobs) if jobs else Outcome.fail("aucune détection de code mort")
+    return await ci_ran(ctx, r"vulture|knip|ts-prune|deadcode|unused|dead[_-]code",
+                        "détection de code mort exécutée dans la CI", "aucune détection de code mort")

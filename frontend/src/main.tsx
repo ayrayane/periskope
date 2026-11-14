@@ -28,15 +28,21 @@ function Shell() {
   const { pathname } = useLocation();
   // After a navigation, focus and the tab title follow the new page's heading, for keyboard and screen-reader users.
   const firstPage = useRef(true);
+  const titled = useRef<{ h1: Element | null; text: string | null }>({ h1: null, text: null });
   useEffect(() => {
-    const id = setTimeout(() => {
+    let tries = 0;
+    const id = setInterval(() => {
       const h1 = document.querySelector<HTMLElement>("main h1");
+      // A page still loading shows no heading, or the previous page's: wait for the new one, three seconds at most.
+      if ((!h1 || (h1 === titled.current.h1 && h1.textContent === titled.current.text)) && ++tries < 30) return;
+      clearInterval(id);
+      titled.current = { h1, text: h1?.textContent ?? null };
       document.title = h1?.textContent ? `${h1.textContent} · Periskope` : "Periskope";
       // Not on the first page: keyboard users start from the skip link, the menu and the GitLab panel.
       if (!firstPage.current && h1 && document.activeElement !== h1 && !document.activeElement?.closest("main")) h1.focus();
       firstPage.current = false;
-    }, 300);
-    return () => clearTimeout(id);
+    }, 100);
+    return () => clearInterval(id);
   }, [pathname]);
   return (
     <>

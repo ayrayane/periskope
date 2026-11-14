@@ -1,4 +1,4 @@
-"""Everything a run reads from GitLab, loaded once and in batches: ~5 calls per analysis."""
+"""Everything a run reads from GitLab, loaded once and in batches: ~7 calls per analysis."""
 from __future__ import annotations
 
 import asyncio
@@ -73,6 +73,20 @@ query($path: ID!, $ref: String!, $paths: [String!]!) {
 """
 
 
+# Jobs that really ran (succeeded or failed; skipped, manual and cancelled ones did not) in the last pipelines of any ref
+# (merge requests included), of the branch and of tags (release-only jobs). Apart from the main query: its failure breaks nothing else.
+JOBS_QUERY = """
+query($path: ID!, $branch: String!) {
+  project(fullPath: $path) {
+    any: pipelines(first: 10) { nodes { ...ran } }
+    branch: pipelines(ref: $branch, first: 10) { nodes { ...ran } }
+    tags: pipelines(scope: TAGS, first: 5) { nodes { ...ran } }
+  }
+}
+fragment ran on Pipeline { jobs(statuses: [SUCCESS, FAILED], first: 100) { nodes { name } pageInfo { hasNextPage } } }
+"""
+
+
 class Tree(NamedTuple):
     """Blob paths at the commit, whether the listing was cut short, and how many entries (files and folders) were read."""
     paths: list[str]
@@ -113,9 +127,12 @@ def strip_disabled(ci: dict[str, Any]) -> dict[str, Any]:
 
 class Context:
     def __init__(self, gl: GitLab, path: str, project_id: int, branch: str, sha: str, *, enterprise: bool = True,
-                 sonar: SonarQube | None = None, sonar_key: str | None = None, now: datetime | None = None):
+                 sonar: SonarQube | None = None, sonar_key: str | None = None, tracking: dict[str, Any] | None = None,
+                 now: datetime | None = None):
         self.gl, self.path, self.project_id, self.branch, self.sha, self.enterprise = gl, path, project_id, branch, sha, enterprise
         self.sonar, self.sonar_key = sonar, sonar_key
+        # What Periskope already keeps on the project, read by the collector: {dt, bricks, followed, ledger}; None when not read.
+        self.tracking = tracking
         self.now = now or datetime.now(UTC)
         self._cache: dict[str, asyncio.Future[Any]] = {}
 
@@ -148,6 +165,20 @@ class Context:
             return {} if not lint.get("valid") and any("does not exist" in e or "Please provide content" in e for e in lint.get("errors", [])) else None
         # Never executed: read in safe mode, size capped by GitLab's own limit.
         return strip_disabled(yaml.safe_load(merged) or {})
+
+    @once
+    async def ran_jobs(self) -> tuple[set[str], bool] | None:
+        """Names of the jobs that ran in the last pipelines, and whether a pipeline had more jobs than were read."""
+        data = await self.gl.graphql(JOBS_QUERY, path=self.path, branch=self.branch)
+        project = (data or {}).get("project") or {}
+        if project.get("any") is None:
+            return None
+        jobs = [p.get("jobs") or {} for alias in ("any", "branch", "tags") for p in nodes(project, alias) or []]
+        return ({j["name"] for js in jobs for j in js.get("nodes") or []}, any((js.get("pageInfo") or {}).get("hasNextPage") for js in jobs))
+
+    def dt_sboms(self) -> list[str]:
+        """Versions of the project running in a Dependency-Track tree with their SBOM: Dependency-Track analyses their components."""
+        return sorted({f"{b['tree']} : {b['version'] or '?'}" for b in (self.tracking or {}).get("bricks", []) if b["running"] and b["sbom"]})
 
     @once
     async def tree(self) -> Tree | None:

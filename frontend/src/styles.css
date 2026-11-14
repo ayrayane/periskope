@@ -59,8 +59,8 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; tex
 .row .name a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scroller { max-height: min(70vh, 900px); overflow: auto; }
 button.sort { background: none; border: 0; padding: 0; color: inherit; font-weight: 600; }
-[aria-sort="ascending"] button.sort::after { content: " ↑"; }
-[aria-sort="descending"] button.sort::after { content: " ↓"; }
+[aria-sort="ascending"] button.sort::after { content: " ↑"; content: " ↑" / ""; }
+[aria-sort="descending"] button.sort::after { content: " ↓"; content: " ↓" / ""; }
 
 .score { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
 .score strong { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
@@ -308,7 +308,7 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .fix { margin-top: 8px; }
 .fix summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--accent); font-weight: 650; font-size: 0.9rem; list-style: none; padding: 4px 12px; border-radius: 999px; background: var(--accent-soft); }
 .fix summary::-webkit-details-marker { display: none; }
-.fix summary::before { content: "›"; display: inline-block; transition: transform 0.2s; font-size: 1.1em; }
+.fix summary::before { content: "›"; content: "›" / ""; display: inline-block; transition: transform 0.2s; font-size: 1.1em; }
 .fix[open] summary::before { transform: rotate(90deg); }
 .fix[open] { padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
 .fix[open] summary { margin-bottom: 8px; }

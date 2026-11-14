@@ -67,14 +67,14 @@ export default function Run() {
                 { value: "pass", label: "Validées", count: listed.filter((c) => r.results![c.id].status === "pass").length, tone: "pass" },
               ]} />
             </div>
-            <div className="table-scroll"><table>
+            <div className="table-scroll"><table aria-label="Preuves de l'analyse">
               <thead><tr><th scope="col">Preuve</th><th scope="col">Statut</th><th scope="col">Constat</th></tr></thead>
               <tbody>
                 {listed.filter((c) => show === "all" || r.results![c.id].status === show).map((c) => (
                   <tr key={c.id}>
                     <td title={c.id} className="cell-main">{c.title}</td>
                     <td><CheckBadge status={r.results![c.id].status} /></td>
-                    <td>{r.results![c.id].message}{!["pass", "not_applicable"].includes(r.results![c.id].status) && <FixGuide fix={c.fix} />}</td>
+                    <td>{r.results![c.id].message}{!["pass", "not_applicable"].includes(r.results![c.id].status) && <FixGuide fix={c.fix} about={c.title} />}</td>
                   </tr>
                 ))}
               </tbody>

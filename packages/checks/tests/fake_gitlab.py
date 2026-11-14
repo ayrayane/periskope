@@ -16,7 +16,7 @@ NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
 
 
 def good() -> dict[str, Any]:
-    """Responses for a project that passes all 40 checks (shapes as GitLab returns them)."""
+    """Responses for a project that passes every check (shapes as GitLab returns them)."""
     mr = lambda branch, author, bot=False, approver="bob", auto=True: {
         "createdAt": "2026-10-20T10:00:00Z", "mergedAt": "2026-10-22T10:00:00Z", "sourceBranch": branch,
         "author": {"username": author, "bot": bot}, "mergeUser": {"username": author, "bot": bot},
@@ -54,6 +54,14 @@ def good() -> dict[str, Any]:
             "semgrep-sast": {"script": ["semgrep"]}, "secret_detection": {"script": ["gitleaks"]},
             "container_scanning": {"script": ["trivy image"]}, "hadolint": {"image": "hadolint/hadolint", "script": ["hadolint Dockerfile"]},
             "vulture": {"script": ["vulture src"]}, "test": {"script": ["pytest"]}})},
+        # Jobs that ran in the last pipelines; None when they cannot be read, "cut" when a pipeline had more jobs than were read.
+        "ran": ["semgrep-sast", "secret_detection", "container_scanning", "hadolint", "vulture", "test"], "cut": False,
+        # What Periskope stores about the project: its versions in the Dependency-Track trees and its vulnerability ledger.
+        "tracking": {"dt": True, "followed": True, "bricks": [
+            {"tree": "CMS · prod", "env": "prod", "version": "1.2", "running": True, "by_tag": False, "sbom": True},
+            {"tree": "CMS · test", "env": "test", "version": "1.2", "running": False, "by_tag": False, "sbom": True}],
+            "ledger": [{"priority": "high", "opened_at": datetime(2026, 10, 1, tzinfo=UTC), "closed_at": datetime(2026, 10, 20, tzinfo=UTC), "deadline_at": datetime(2026, 10, 31, tzinfo=UTC)},
+                       {"priority": "low", "opened_at": datetime(2026, 10, 1, tzinfo=UTC), "closed_at": None, "deadline_at": datetime(2026, 12, 30, tzinfo=UTC)}]},
         "tree": [{"path": p, "type": "blob"} for p in (
             ".gitignore", ".pre-commit-config.yaml", "SECURITY.md", "CODEOWNERS", "Dockerfile", "pyproject.toml", "uv.lock",
             "tests/test_auth.py", "tests/integration/test_access_control.py", "src/app.py")],
@@ -88,6 +96,9 @@ def transport(data: dict[str, Any]) -> httpx.MockTransport:
                 files = {i["path"]: "" for i in data.get("tree") or [] if i["type"] == "blob"} | data["blobs"]
                 blobs = [{"path": p, "rawSize": len(t), "rawTextBlob": t} for p, t in files.items() if p in wanted]
                 return httpx.Response(200, json={"data": {"project": {"repository": {"blobs": {"nodes": blobs}}}}})
+            if "...ran" in body["query"]:
+                ran = data["ran"] is not None and {"nodes": [{"jobs": {"nodes": [{"name": n} for n in data["ran"]], "pageInfo": {"hasNextPage": data["cut"]}}}]}
+                return httpx.Response(200, json={"data": {"project": {"any": ran, "branch": ran, "tags": ran} if ran else None}})
             return httpx.Response(200, json={"data": {"project": data["project"]}})
         if path.endswith("/repository/tree") and data.get("tree") is not None:
             # Keyset pages of per_page entries, the next one named by a Link header, as GitLab does.
@@ -119,4 +130,4 @@ def context(data: dict[str, Any], tmp: Path, enterprise: bool = True, sonar: boo
     data = copy.deepcopy(data)
     gl = GitLab("https://gitlab.test", token, transport=transport(data))
     sq = SonarQube("https://sonar.test", token, transport=sonar_transport(data)) if sonar else None
-    return Context(gl, "team/app", 7, "main", "abc123", enterprise=enterprise, sonar=sq, sonar_key="team_app", now=NOW)
+    return Context(gl, "team/app", 7, "main", "abc123", enterprise=enterprise, sonar=sq, sonar_key="team_app", tracking=data["tracking"], now=NOW)

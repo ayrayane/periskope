@@ -40,7 +40,7 @@ spec:
         - { name: alerts, secret: { secretName: {{ .Values.alerts.secret }} } }
         {{- end }}
         {{- if .Values.dependencyTrack.url }}
-        # Key `apiKey`: a DT API key whose team has VIEW_PORTFOLIO and VIEW_VULNERABILITY only (Periskope never writes to DT).
+        # Key `apiKey`: a DT API key whose team has VIEW_PORTFOLIO, VIEW_VULNERABILITY and SYSTEM_CONFIGURATION_READ only (Periskope never writes to DT).
         - { name: dtrack, secret: { secretName: {{ .Values.dependencyTrack.apiKeySecret }} } }
         {{- end }}
 ---

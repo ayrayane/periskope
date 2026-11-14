@@ -49,6 +49,13 @@ const PRACTICES: Record<string, string> = {
   "Dead code elimination": "Code mort éliminé",
   "Exclusion of source code duplicates": "Duplication de code maîtrisée",
   "Static analysis for all components/libraries": "Analyse statique de tout le code",
+  "Software Composition Analysis (server side)": "Dépendances analysées (SCA)",
+  "Inventory of production components": "Inventaire des composants en production",
+  "Inventory of production artifacts": "Inventaire des versions en production",
+  "Inventory of production dependencies": "Inventaire des dépendances en production",
+  "Same artifact for environments": "Même artefact du test à la production",
+  "SLA per criticality": "Délais de correction tenus par criticité",
+  "Fix rate per repo/product": "Taux de correction des vulnérabilités",
 };
 
 /** The French name, or the DSOMM one for a practice added to the referential after this table. */

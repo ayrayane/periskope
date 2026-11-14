@@ -250,7 +250,7 @@ function Activities({ project, checks, activities }: { project: P; checks: Check
           <section key={dimension} className="group" id={anchor(dimension)}>
             <h2 title={dimension}>{dimLabel(dimension)} <span className="muted small">{s != null ? `${Math.round(s)}/100 · ${coverage(list) === 100 ? "tout vérifié" : `vérifiée à ${coverage(list)} %`}` : "rien de mesuré"}</span></h2>
             <div className="table-scroll">
-              <table className="t-fixed t-acts">
+              <table className="t-fixed t-acts" aria-label={dimLabel(dimension)}>
                 <thead><tr>
                   <SortTh k="name" label="Pratique DSOMM" sort={sort} onSort={toggle} />
                   <SortTh k="level" label="Niveau" sort={sort} onSort={toggle} className="num" />
@@ -307,7 +307,7 @@ function Checks({ results, checks, url, instance }: { results: Record<string, Ch
         <section key={source} className="group">
           <h2>{SOURCE[source] ?? source} <span className="muted small">{list.length} preuve{list.length > 1 ? "s" : ""}</span></h2>
           <div className="table-scroll">
-            <table className="t-fixed t-checks">
+            <table aria-label={SOURCE[source] ?? source} className="t-fixed t-checks">
               <thead><tr>
                 <SortTh k="title" label="Preuve" sort={sort} onSort={toggle} />
                 <SortTh k="status" label="Résultat" sort={sort} onSort={toggle} />
@@ -323,7 +323,7 @@ function Checks({ results, checks, url, instance }: { results: Record<string, Ch
                       <td>{c.scope?.decision === "excluded" ? <span className="muted">{c.scope.reason}</span> : r?.message}{r?.reused && <span className="muted small"> (inchangé depuis l'analyse précédente)</span>}
                         {c.scope?.decision !== "excluded" && r && r.status !== "pass" && r.status !== "not_applicable" && <>
                           {fixable.has(c.id) && <FixIt url={url} instance={instance} check={c.id} kind={fixable.get(c.id)!.kind} />}
-                          <FixGuide fix={c.fix} /></>}</td>
+                          <FixGuide fix={c.fix} about={c.title} /></>}</td>
                     </tr>
                   );
                 })}
@@ -349,7 +349,7 @@ function Todo({ url, targetLevel, checks }: { url: string; targetLevel: number; 
           <h2><span title={a.activity}>{practice(a.activity)}</span> <span className="muted small">niveau {a.level}{a.status === "partial" ? " · partielle" : ""}</span></h2>
           {a.blocked_by.length > 0 && <p className="muted small">Prérequis : {a.blocked_by.map(practice).join(", ")}</p>}
           <ul>
-            {a.steps.map((s) => <li key={s.check}>{s.action ?? s.message}{s.action && <><br /><span className="muted small">Constat : {s.message}</span></>}<FixGuide fix={fixes[s.check]} /></li>)}
+            {a.steps.map((s) => <li key={s.check}>{s.action ?? s.message}{s.action && <><br /><span className="muted small">Constat : {s.message}</span></>}<FixGuide fix={fixes[s.check]} about={s.action ?? s.message} /></li>)}
           </ul>
         </li>
       ))}
@@ -379,7 +379,7 @@ function Branches({ url, project, busy, onLaunch }: { url: string; project: P; b
           <input type="search" placeholder="Filtrer les branches" value={filter} onChange={(e) => setFilter(e.target.value)} /></label>
       )}
       <div className="table-scroll">
-        <table>
+        <table aria-label="Branches">
           <thead><tr><th scope="col">Branche</th><th scope="col">Dernier commit</th><th scope="col">Score</th><th scope="col">Écart</th><th scope="col">Dernière analyse</th>{project.can_launch && <th scope="col"><span className="sr-only">Action</span></th>}</tr></thead>
           <tbody>
             {shown.map((name) => {
@@ -415,7 +415,7 @@ function History({ url, defaultBranch }: { url: string; defaultBranch: string | 
     <>
       <ScoreChart runs={runs.data.items.filter((r) => r.branch === defaultBranch)} />
       <div className="table-scroll">
-        <table>
+        <table aria-label="Analyses">
           <thead><tr><th scope="col">Date</th><th scope="col">Déclencheur</th><th scope="col">Branche</th><th scope="col">Statut</th><th scope="col">Score</th></tr></thead>
           <tbody>
             {runs.data.items.map((r) => (
@@ -459,7 +459,7 @@ function NextSteps({ project, url, activities, checks, onAll }: { project: P; ur
               <li key={a.activity}>
                 <span className="next-what">{step?.action ?? a.activity}</span>
                 <span className="muted small"> · <span title={a.activity}>{practice(a.activity)}</span>, niveau {a.level}</span>
-                {step && <FixGuide fix={fixes[step.check]} />}
+                {step && <FixGuide fix={fixes[step.check]} about={step.action ?? a.activity} />}
               </li>
             );
           })}

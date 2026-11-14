@@ -85,6 +85,29 @@ async def test_run_lifecycle_and_reuse(db, tmp_path):
         analysis.ENGINE_VERSION = analysis.engine_version()
 
 
+async def test_scanner_waiting_for_its_first_pipeline_is_judged_again(db, tmp_path):
+    from periskope_collector.analysis import analyse
+
+    project_id = await db.fetchval("SELECT id FROM projects WHERE gitlab_id = 7")
+    data = good()
+    data["ran"] = ["test"]
+    ctx = context(data, tmp_path)
+    first = await runs.create(db, project_id, "main", "user", "alice")
+    await analyse(db, ctx.gl, first, enterprise=True, sonar=ctx.sonar)
+    assert (await db.fetchval("SELECT results FROM runs WHERE id = $1", first))["gitlab.sast"]["status"] == "fail"
+    ctx = context(good(), tmp_path)
+    second = await runs.create(db, project_id, "main", "nightly", None)
+    await analyse(db, ctx.gl, second, enterprise=True, sonar=ctx.sonar)
+    results = await db.fetchval("SELECT results FROM runs WHERE id = $1", second)
+    # Same commit: only what was waiting for a pipeline is read again.
+    assert results["gitlab.sast"]["status"] == "pass" and not results["gitlab.sast"].get("reused") and results["repo.gitignore"].get("reused")
+    # The pass becomes the reference: the next run at this commit reads nothing again.
+    assert await db.fetchval("SELECT reused_from FROM runs WHERE id = $1", second) is None
+    third = await runs.create(db, project_id, "main", "nightly", None)
+    await analyse(db, ctx.gl, third, enterprise=True, sonar=ctx.sonar)
+    assert (await db.fetchval("SELECT results FROM runs WHERE id = $1", third))["gitlab.sast"].get("reused")
+
+
 async def test_failed_source_keeps_last_score(db, tmp_path):
     from periskope_collector.analysis import analyse
 
@@ -396,6 +419,10 @@ def test_other_team_reaches_nothing(client, db, tmp_path):
     async def analysed(gitlab_id):
         pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
         project_id = await pool.fetchval("SELECT id FROM projects WHERE gitlab_id = $1", gitlab_id)
+        # Its version in a production tree of Dependency-Track: the inventory of level 1 is measured, as for a compliant project.
+        await pool.execute("INSERT INTO dt_projects (uuid, name, root, kind, env) VALUES ($1, 'CMS · prod', $1, 'tree', 'prod')", f"tree-{gitlab_id}")
+        await pool.execute("INSERT INTO dt_projects (uuid, name, version, root, kind, bom_at, project_id) VALUES ($1, 'app', '1.2', $2, 'brick', now(), $3)",
+                           f"brick-{gitlab_id}", f"tree-{gitlab_id}", project_id)
         run = await runs.create(pool, project_id, "main", "user", "x")
         ctx = context(good(), tmp_path)
         await analyse(pool, ctx.gl, run, enterprise=True, sonar=ctx.sonar)
