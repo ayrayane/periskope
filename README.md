@@ -104,6 +104,9 @@ priority is the severity.
 
 ## Dependency-Track
 
+Dependency-Track is required on every instance: without it the level-1 activity « Inventory of production components »
+stays unknown, so no project reaches the « socle N1 ».
+
 With `dependencyTrack.url`, the scheduler reads DT every hour, read only (an API key whose team has VIEW_PORTFOLIO,
 VIEW_VULNERABILITY and SYSTEM_CONFIGURATION_READ, the last one to read when the CVE sources were last mirrored; Secret
 `periskope-dtrack`, key `apiKey`):

@@ -99,6 +99,8 @@ def transport(data: dict[str, Any]) -> httpx.MockTransport:
             if "...ran" in body["query"]:
                 ran = data["ran"] is not None and {"nodes": [{"jobs": {"nodes": [{"name": n} for n in data["ran"]], "pageInfo": {"hasNextPage": data["cut"]}}}]}
                 return httpx.Response(200, json={"data": {"project": {"any": ran, "branch": ran, "tags": ran} if ran else None}})
+            if "jobArtifacts" in body["query"] and data.get("artifacts_down"):  # a monorepo's thousands of artifacts: GitLab gives up
+                return httpx.Response(504, json={"message": "timeout"})
             return httpx.Response(200, json={"data": {"project": data["project"]}})
         if path.endswith("/repository/tree") and data.get("tree") is not None:
             # Keyset pages of per_page entries, the next one named by a Link header, as GitLab does.

@@ -73,7 +73,7 @@ export default function Vulnerabilities() {
 
       <div className="tab-bar">
       <div className="status-filter" role="group" aria-label="Regrouper par">
-        <button type="button" aria-pressed={!byProject} onClick={() => { setSearch(""); set({ vue: null, q: null }); }}>Par CVE</button>
+        <button type="button" aria-pressed={byCve} onClick={() => { setSearch(""); set({ vue: null, q: null }); }}>Par CVE</button>
         <button type="button" aria-pressed={byProject} onClick={() => { setSearch(""); set({ vue: "projets", q: null, cve: null }); }}>Par projet</button>
         {dt.data?.configured && <>
           <button type="button" aria-pressed={view === "versions"} onClick={() => { setSearch(""); set({ vue: "versions", q: null, cve: null }); }}>Par version livrée</button>

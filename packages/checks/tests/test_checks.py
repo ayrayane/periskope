@@ -190,8 +190,18 @@ async def test_all_pass_on_good_project(tmp_path):
 async def test_good_project_stays_under_call_budget(tmp_path):
     ctx = context(good(), tmp_path)
     await run_all(ctx)
-    # GraphQL project + blobs + executed jobs, approvals, tokens, CI lint, tree: the spec's target is 5 on average, 15 at worst.
-    assert ctx.gl.calls <= 7
+    # GraphQL project + report types + blobs + executed jobs, approvals, tokens, CI lint, tree: the spec's target is 5 on average, 15 at worst.
+    assert ctx.gl.calls <= 8
+
+
+async def test_unreadable_reports_only_touch_the_checks_that_need_them(tmp_path):
+    """On a large monorepo GitLab may give up listing the pipelines' artifacts: the analysis goes on, those checks are unknown."""
+    normal = await run_all(context(good(), tmp_path))
+    data = good()
+    data["artifacts_down"] = True
+    down = await run_all(context(data, tmp_path))
+    changed = {k for k in normal if down[k].status != normal[k].status}
+    assert "gitlab.vuln_layers" in changed and all(down[k].status == CheckStatus.UNKNOWN for k in changed), {k: down[k].message for k in changed}
 
 
 async def test_sonar_absent_is_unknown_never_fail(tmp_path):
@@ -301,7 +311,7 @@ async def test_cut_listing_never_concludes_absence(tmp_path, monkeypatch):
     for k in ("repo.patch_policy", "repo.security_champion", "repo.precommit_security", "repo.gitignore", "repo.precommit_lint"):
         assert status[k] == CheckStatus.PASS, (k, outcomes[k].message)
     msg = outcomes["repo.pinning_images"].message
-    assert "aucun Dockerfile" in msg and "1 000 entrées lues" in msg and "la suite n'a pas été lue" in msg
+    assert "aucun Dockerfile" in msg and "1 000 entrées lues" in msg and "100 fichiers), la suite n'a pas été lue" in msg
     assert outcomes["repo.pinning_images"].evidence == {"entries_read": 1000, "files_read": 100, "truncated": True}
 
 

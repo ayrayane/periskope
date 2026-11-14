@@ -71,7 +71,8 @@ async def test_run_lifecycle_and_reuse(db, tmp_path):
     # Same commit and settings: commit checks reused, no copy of the evidence, fewer calls.
     assert row["status"] == "succeeded" and row["reused_from"] == first
     assert await db.fetchval("SELECT count(*) FROM run_evidence WHERE run_id = $1", second) == 0
-    assert row["gitlab_calls"] == ctx.gl.calls - calls <= 3
+    # Project, report types, approvals, tokens: what the live checks read again.
+    assert row["gitlab_calls"] == ctx.gl.calls - calls <= 4
 
     # Seen on the lab: a fixed check must not keep its stale result because the commit did not move.
     from periskope_collector import analysis

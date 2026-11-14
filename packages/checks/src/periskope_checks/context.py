@@ -1,4 +1,4 @@
-"""Everything a run reads from GitLab, loaded once and in batches: ~7 calls per analysis."""
+"""Everything a run reads from GitLab, loaded once and in batches: ~8 calls per analysis."""
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +9,7 @@ from functools import wraps
 from typing import Any, NamedTuple, TypeVar
 
 import yaml
-from periskope_clients.gitlab import GitLab
+from periskope_clients.gitlab import GitLab, SourceDown
 from periskope_clients.sonar import SonarQube
 from periskope_core.models import Outcome
 
@@ -30,6 +30,13 @@ LIVE_DAYS = 90
 # Sample, vendored and generated code is not the product: repository checks never judge the project on it.
 NOT_PRODUCT = re.compile(r"(^|/)(examples?|samples?|demos?|vendor|third[_-]?party|node_modules|testdata|fixtures)/", re.IGNORECASE)
 
+# Report types of the branch's last pipelines, apart from the project query: a large monorepo's pipeline lists ~1 200
+# artifacts, and 20 pipelines of them made gitlab.com give up after 60 s, failing the whole analysis.
+ARTIFACTS_QUERY = """
+query($path: ID!, $branch: String!) {
+  project(fullPath: $path) { pipelines(ref: $branch, first: 5) { nodes { jobArtifacts { fileType } } } }
+}
+"""
 # One query for the project's settings, protections, variables, members, MRs, pipelines and vulnerabilities.
 PROJECT_QUERY = """
 query($path: ID!, $branch: String!, $since: Time!) {
@@ -51,7 +58,6 @@ query($path: ID!, $branch: String!, $since: Time!) {
       autoMergeEnabled mergeWhenPipelineSucceeds labels { nodes { title } } approvedBy { nodes { username } } } }
     pipelines(ref: $branch, first: 20) { nodes {
       status createdAt finishedAt
-      jobArtifacts { fileType }
       testReportSummary { total { count } testSuites { nodes { name totalCount } } } } }
     vulnerabilities(state: [DETECTED, CONFIRMED], first: 100) { nodes { reportType severity title detectedAt identifiers { externalType externalId } } } # ee
     vulnerabilitySeveritiesCount(state: [DETECTED, CONFIRMED]) { critical high medium low info unknown } # ee
@@ -228,9 +234,11 @@ class Context:
             return Outcome.unknown("arborescence illisible")
         if not tree.truncated:
             return None
-        n = f"{tree.entries:,}".replace(",", " ")
-        return Outcome.unknown(f"{absent} dans la partie lue de l'arborescence : {n} entrées lues ({len(tree.paths):,} fichiers), "
-                               f"la suite n'a pas été lue (limite de {MAX_TREE_ENTRIES:,} entrées ou {MAX_TREE_SECONDS} s)".replace(",", " "),
+        def num(x: int) -> str:
+            return f"{x:,}".replace(",", " ")
+        files = f"{num(len(tree.paths))} fichier{'s' if len(tree.paths) > 1 else ''}"
+        return Outcome.unknown(f"{absent} dans la partie lue de l'arborescence : {num(tree.entries)} entrées lues ({files}), "
+                               f"la suite n'a pas été lue (limite de {num(MAX_TREE_ENTRIES)} entrées ou {MAX_TREE_SECONDS} s)",
                                entries_read=tree.entries, files_read=len(tree.paths), truncated=True)
 
     # SonarQube of the instance, when it has one and the project has a key.
@@ -276,9 +284,14 @@ class Context:
     async def merged_mrs(self) -> list[dict[str, Any]] | None:
         return nodes(await self.project(), "mergeRequests")
 
+    @once
     async def artifact_types(self) -> set[str] | None:
-        """Report types produced by the branch's recent pipelines (sast, dast, cyclonedx, junit…)."""
-        pipelines = await self.pipelines()
+        """Report types produced by the branch's last 5 pipelines (sast, dast, cyclonedx, junit…)."""
+        try:
+            data = await self.gl.graphql(ARTIFACTS_QUERY, path=self.path, branch=self.branch)
+        except SourceDown:
+            return None  # the project itself was read: only the checks that need reports are unknown
+        pipelines = nodes((data or {}).get("project"), "pipelines")
         if pipelines is None:
             return None
         return {a["fileType"].lower() for p in pipelines for a in p.get("jobArtifacts") or []}

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.1 — 2026-11-14
+
+- Large monorepos: the report types of the branch's pipelines are read by their own query, over the last 5 pipelines instead of 20. On gitlab-org/gitlab (about 1 200 artifacts per pipeline) the single project query took more than 60 s, gitlab.com gave up and the whole analysis failed as « GitLab injoignable ». If that query still fails, only the checks that need reports (`gitlab.sbom_artifact`, `gitlab.vuln_layers`, `gitlab.secure_headers`, `dt.sca`…) are unknown. About 8 GitLab calls per analysis instead of 7.
+- A cut repository listing says « (0 fichier), la suite… » again: the sentence comma was turned into a space with the thousands separators, and « fichier » now agrees.
+- Dependency-Track is required on every instance (README): without it « Inventory of production components » (level 1) stays unknown and no project reaches the « socle N1 ». Decided: no fallback on the GitLab topic, no default exclusion.
+- `docs/mesure-gros-depot.py`: a read-only measurement of one large repository, run in an instance's collector pod. It lists the tree as an analysis does, runs every check once and says what stopped the listing (the 50 000-entry cap or the 120 s). On the lab GitLab: 0.19 s per page of 100, so the cap stops it; on gitlab.com, anonymous, about 1.2 s per page, so the time does.
+- Vulnérabilités: « Par CVE » is no longer shown pressed on the « Par version livrée » and « Exceptions et VEX » views.
+
 ## 1.5.0 — 2026-11-14
 
 - The five scanner checks read in the merged CI (`gitlab.secret_detection`, `gitlab.image_secret_scan`, `gitlab.dockerfile_lint`, `gitlab.sast`, `gitlab.dead_code`) now need the declared job to have run, succeeded or failed, in the last pipelines (10 of the project, 10 of the branch, 5 of tags). A job declared but never run fails; a result still waiting for its first pipeline is marked `pending` and judged again at each run, even at the same commit. No extra GitLab call on an unchanged commit once the job has run.
