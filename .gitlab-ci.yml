@@ -1,5 +1,13 @@
-# Monorepo CI: tests and boundaries on every MR, images and chart on tags (same version for all three).
+# Monorepo CI: tests and boundaries on every MR and on main, images and chart on tags (same version for all three).
+# A tag is cut from a main commit whose pipeline already ran the tests: its own pipeline only builds, scans and publishes,
+# so a release no longer runs everything twice on the lab's single runner.
 stages: [test, build, publish]
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG
+      variables: { SAST_DISABLED: "true", SECRET_DETECTION_DISABLED: "true" }
+    - when: always
 
 variables:
   UV_CACHE_DIR: .uv-cache
@@ -27,7 +35,7 @@ python:
     POSTGRES_PASSWORD: ci
     PERISKOPE_TEST_DATABASE_URL: postgresql://periskope:ci@postgres:5432/periskope
     PERISKOPE_TEST_VALKEY_URL: redis://valkey:6379
-  rules: [{ changes: *python }, { if: $CI_COMMIT_TAG }]
+  rules: [{ if: $CI_COMMIT_TAG, when: never }, { changes: *python }]
   script:
     - uv sync --frozen
     - uv run ruff check .
@@ -45,7 +53,7 @@ python:
 frontend:
   stage: test
   image: node:22-alpine
-  rules: [{ changes: [frontend/**/*] }, { if: $CI_COMMIT_TAG }]
+  rules: [{ if: $CI_COMMIT_TAG, when: never }, { changes: [frontend/**/*] }]
   script:
     - cd frontend && npm ci && npm run typecheck && npm test && npm run build
     - npm audit --omit=dev --audit-level=high
@@ -63,14 +71,14 @@ sbom:
 chart:lint:
   stage: test
   image: alpine/helm:3.16.3
-  rules: [{ changes: [chart/**/*] }, { if: $CI_COMMIT_TAG }]
+  rules: [{ if: $CI_COMMIT_TAG, when: never }, { changes: [chart/**/*] }]
   script:
     - helm lint chart/periskope -f chart/periskope/ci-values.yaml
 
 chart:render:
   stage: test
   image: alpine/helm:3.16.3
-  rules: [{ changes: [chart/**/*] }]
+  rules: [{ if: $CI_COMMIT_TAG, when: never }, { changes: [chart/**/*] }]
   script:
     - wget -qO- https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin
     - helm template periskope chart/periskope -f chart/periskope/ci-values.yaml
@@ -81,7 +89,7 @@ chart:render:
 chart:unittest:
   stage: test
   image: alpine/helm:3.16.3
-  rules: [{ changes: [chart/**/*] }]
+  rules: [{ if: $CI_COMMIT_TAG, when: never }, { changes: [chart/**/*] }]
   script:
     - helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.3
     - helm unittest chart/periskope
@@ -97,14 +105,14 @@ chart:unittest:
 image:python:
   stage: build
   extends: .kaniko
-  rules: [{ if: $CI_COMMIT_TAG }, { if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH, changes: *python }]
+  rules: [{ if: $CI_COMMIT_TAG }]
   script:
     - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile Dockerfile $CERT --destination "$CI_REGISTRY_IMAGE:$TAG"
 
 image:frontend:
   stage: build
   extends: .kaniko
-  rules: [{ if: $CI_COMMIT_TAG }, { if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH, changes: [frontend/**/*] }]
+  rules: [{ if: $CI_COMMIT_TAG }]
   script:
     - /kaniko/executor --context "$CI_PROJECT_DIR/frontend" --dockerfile "$CI_PROJECT_DIR/frontend/Dockerfile" $CERT --destination "$CI_REGISTRY_IMAGE/frontend:$TAG"
 
