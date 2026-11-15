@@ -315,6 +315,37 @@ async def test_cut_listing_never_concludes_absence(tmp_path, monkeypatch):
     assert outcomes["repo.pinning_images"].evidence == {"entries_read": 1000, "files_read": 100, "truncated": True}
 
 
+@pytest.fixture
+def git_repo(tmp_path):
+    """A bare repository at <tmp_path>/grp/proj.git, as GitLab would serve it; returns its commit."""
+    import subprocess
+    src = tmp_path / "work"
+    for f in ["Dockerfile", "deep/a/b/c/package-lock.json", "café/test_auth.py"]:
+        (src / f).parent.mkdir(parents=True, exist_ok=True)
+        (src / f).write_text("x\n")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(src)]
+    subprocess.run(["git", "init", "-q", str(src)], check=True)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-qm", "c"], check=True)
+    subprocess.run(["git", "clone", "-q", "--bare", str(src), str(tmp_path / "grp" / "proj.git")], check=True)
+    return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+async def test_listing_comes_whole_from_one_git_fetch(tmp_path, git_repo):
+    """The trees of the commit in one fetch, whatever the size: no page cap, nothing cut, one call counted."""
+    from periskope_checks.context import Context
+    from periskope_clients.gitlab import GitLab
+
+    token = tmp_path / "token"
+    token.write_text("t")
+    gl = GitLab(f"file://{tmp_path}", token)
+    tree = await Context(gl, "grp/proj", 1, "main", git_repo).tree()
+    assert sorted(tree.paths) == ["Dockerfile", "café/test_auth.py", "deep/a/b/c/package-lock.json"]
+    assert (tree.truncated, gl.calls) == (False, 1)
+    assert await gl.ls_files("grp/proj", "0" * 40, 30) is None  # an unknown commit falls back to the API listing
+    await gl.aclose()
+
+
 SCANNERS = ["gitlab.secret_detection", "gitlab.image_secret_scan", "gitlab.dockerfile_lint", "gitlab.sast", "gitlab.dead_code"]
 
 

@@ -16,7 +16,7 @@ from periskope_core.models import Outcome
 T = TypeVar("T")
 MAX_FILE_BYTES = 512 * 1024
 MAX_FILES = 40
-# The whole listing, read again only when the commit changes: up to 50 000 entries (100 per request) and 120 seconds,
+# The fallback listing, when git cannot fetch the trees: up to 50 000 entries (100 per request) and 120 seconds,
 # well inside the analysis' own 300 s. GitLab lists folders before files, so a cut listing misses files first.
 MAX_TREE_ENTRIES = 50_000
 MAX_TREE_SECONDS = 120
@@ -188,6 +188,9 @@ class Context:
 
     @once
     async def tree(self) -> Tree | None:
+        """The whole listing from one git fetch of the trees; the paginated API, capped, only when git cannot read it."""
+        if (paths := await self.gl.ls_files(self.path, self.sha, MAX_TREE_SECONDS)) is not None:
+            return Tree(paths, False, len(paths))
         res = await self.gl.pages(f"{self.api}/repository/tree", recursive="true", ref=self.sha, pagination="keyset",
                                   max_pages=MAX_TREE_ENTRIES // 100, max_seconds=MAX_TREE_SECONDS)
         if res is None:

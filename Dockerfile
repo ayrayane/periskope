@@ -10,7 +10,9 @@ COPY services services
 RUN uv sync --frozen --no-dev --no-editable
 
 FROM docker.io/library/python:3.12-slim
-RUN useradd --uid 10001 --no-create-home periskope
+# git lists a repository's files in one fetch: the collector reads large monorepos whole.
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --no-create-home periskope
 COPY --from=build /app/.venv /app/.venv
 COPY docker/entrypoint.sh /app/entrypoint.sh
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1

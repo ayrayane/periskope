@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import os
+import signal
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -37,6 +41,7 @@ class GitLab:
         # Told every HTTP status (0 when unreachable), for the collector's metrics.
         self.on_response = on_response or (lambda status: None)
         self.calls = 0
+        self.verify, self._transport = verify, transport
         self._token, self._read_at = "", 0.0
         self.http = httpx.AsyncClient(
             base_url=self.url, http2=transport is None, transport=transport, verify=verify, timeout=httpx.Timeout(30, connect=10),
@@ -109,6 +114,51 @@ class GitLab:
             if not url:
                 return items, False
         return items, True
+
+    async def ls_files(self, project_path: str, sha: str, timeout: float) -> list[str] | None:
+        """Every file path at the commit, from one shallow git fetch of the trees only (no file contents): a monorepo's
+        100 000 files in seconds, where the paginated tree API needs over a thousand calls. None when git cannot read it."""
+        if self._transport:
+            return None  # a test transport has no git server behind it
+        with tempfile.TemporaryDirectory() as repo:
+            # The token travels in git's environment, never on its command line.
+            basic = base64.b64encode(f"oauth2:{self._auth()['Authorization'].removeprefix('Bearer ')}".encode()).decode()
+            # No redirect: the header would follow it to another host.
+            config = {"http.extraHeader": f"Authorization: Basic {basic}", "http.followRedirects": "false", "protocol.version": "2"}
+            if isinstance(self.verify, str):
+                config["http.sslCAInfo"] = self.verify
+            elif not self.verify:
+                config["http.sslVerify"] = "false"
+            env = {"PATH": os.environ.get("PATH", ""), "HOME": repo, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_CONFIG_COUNT": str(len(config))}
+            for i, (k, v) in enumerate(config.items()):
+                env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"] = k, v
+            steps = [["init", "-q", "--bare", repo],
+                     ["-C", repo, "fetch", "-q", "--depth=1", "--filter=blob:none", "--no-tags", f"{self.url}/{project_path}.git", sha],
+                     ["-C", repo, "ls-tree", "-r", "-z", "--name-only", sha]]
+            until = time.monotonic() + timeout
+            out = b""
+            for step in steps:
+                if "fetch" in step:  # the one step that calls GitLab
+                    if self.acquire:
+                        await self.acquire()
+                    self.calls += 1
+                    if (counter := run_calls.get()) is not None:
+                        counter[0] += 1
+                try:
+                    proc = await asyncio.create_subprocess_exec("git", *step, env=env, stdout=asyncio.subprocess.PIPE,
+                                                                stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+                except FileNotFoundError:
+                    return None
+                try:
+                    out, _ = await asyncio.wait_for(proc.communicate(), max(until - time.monotonic(), 1))
+                except TimeoutError:
+                    os.killpg(proc.pid, signal.SIGKILL)  # git and its git-remote-https child
+                    await proc.wait()
+                    return None
+                if proc.returncode:
+                    return None
+            return [p for p in out.decode(errors="replace").split("\0") if p]
 
     async def graphql(self, query: str, **variables: Any) -> dict[str, Any] | None:
         r = await self.request("POST", "/api/graphql", json={"query": query, "variables": variables})

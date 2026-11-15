@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.2 — 2026-11-15
+
+- Large monorepos are read whole: the repository listing comes from one shallow git fetch of the commit's trees (no file contents), with the service token's `read_repository`. gitlab-org/gitlab: 118 195 files in 2 s and 6 MB, where the paginated tree API stopped at 120 s with folders only. The paginated listing, capped at 50 000 entries or 120 s, stays as the fallback when git cannot read the repository. The image now carries git.
+
 ## 1.5.1 — 2026-11-14
 
 - Large monorepos: the report types of the branch's pipelines are read by their own query, over the last 5 pipelines instead of 20. On gitlab-org/gitlab (about 1 200 artifacts per pipeline) the single project query took more than 60 s, gitlab.com gave up and the whole analysis failed as « GitLab injoignable ». If that query still fails, only the checks that need reports (`gitlab.sbom_artifact`, `gitlab.vuln_layers`, `gitlab.secure_headers`, `dt.sca`…) are unknown. About 8 GitLab calls per analysis instead of 7.
