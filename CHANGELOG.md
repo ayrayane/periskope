@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1 — 2026-11-16
+
+- CI: the `python` job installs git, which the repository listing test of 1.5.2 drives; `main` had been red since. 1.6.0 was tagged but its images were never built (the lab runner failed three times), so 1.6.1 is the first published 1.6.
+
 ## 1.6.0 — 2026-11-16
 
 - Dependency-Track as it is organised in production: one DT project per GitLab repository, named by its full path (`group/subgroup/project`), its version the GitLab tag, at any depth. Before, only the direct children of a root project were read, and only a root named `… · prod|test|dev` was an environment: on such a DT nothing was linked and every production check stayed unknown.

@@ -37,6 +37,8 @@ python:
     PERISKOPE_TEST_VALKEY_URL: redis://valkey:6379
   rules: [{ if: $CI_COMMIT_TAG, when: never }, { changes: *python }]
   script:
+    # The repository listing test drives git, as the collector image does.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git > /dev/null
     - uv sync --frozen
     - uv run ruff check .
     - uv run lint-imports
