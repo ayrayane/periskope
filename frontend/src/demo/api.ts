@@ -256,19 +256,19 @@ function demoFix(instance: string, path: string, check: string | undefined, prev
     : { done: "Démo : le réglage aurait été appliqué avec votre compte GitLab. Rien n'a été modifié." };
 }
 
-// Dependency-Track in the demo: the projects of the first group with findings are bricks of the CMS, in prod and test and in two JAR deliveries.
+// Dependency-Track in the demo: the projects of the first group with findings are bricks of delivered versions (collection projects).
 const DT_TYPES = new Set(["dependency_scanning", "container_scanning"]);
 const BRICKS = PROJECTS.filter((x) => x.findings?.some((f) => DT_TYPES.has(f.type)) && x.instance === PROJECTS[0].instance).slice(0, 9);
 const TREES = [
-  { uuid: "t-prod", name: "CMS · prod", env: "prod", active: true, minor: 4 }, { uuid: "t-test", name: "CMS · test", env: "test", active: true, minor: 5 },
-  { uuid: "t-520", name: "CMS · 5.2.0 (livraison JAR)", env: null, active: true, minor: 4 }, { uuid: "t-510", name: "CMS · 5.1.0 (livraison JAR)", env: null, active: false, minor: 2 },
+  { uuid: "t-prod", name: "CMS 5.2.0", env: null as string | null, active: true, minor: 4 }, { uuid: "t-test", name: "CMS 5.3.0", env: null, active: true, minor: 5 },
+  { uuid: "t-520", name: "Portail 2.0", env: null, active: true, minor: 4 }, { uuid: "t-510", name: "CMS 5.1.0", env: null, active: false, minor: 2 },
 ];
 const brickName = (x: Demo) => x.path.split("/").at(-1)!;
 const versionOf = (x: Demo, t: (typeof TREES)[number]) => `${1 + (x.id % 3)}.${t.minor}.${x.id % 4}`;
 // What DT finds in a brick of a tree: its dependency findings; test has fixed the most severe one; 5.1.0 still carries an older one.
 const dtFindings = (x: Demo, t: (typeof TREES)[number]) => {
   const own = (x.findings ?? []).filter((f) => DT_TYPES.has(f.type));
-  return t.env === "test" ? own.slice(1) : t.uuid === "t-510" ? [...own, { key: "CVE-2022-22965", cve: true, severity: "critical", title: "Spring4Shell : exécution de code dans spring-beans", type: "dependency_scanning", detected_at: iso(NOW - 300 * DAY) }] : own;
+  return t.uuid === "t-test" ? own.slice(1) : t.uuid === "t-510" ? [...own, { key: "CVE-2022-22965", cve: true, severity: "critical", title: "Spring4Shell : exécution de code dans spring-beans", type: "dependency_scanning", detected_at: iso(NOW - 300 * DAY) }] : own;
 };
 const dtTrees = (x: Demo) => (BRICKS.includes(x) ? TREES.filter((t) => t.active).map((t) => t.name) : null);
 const sbom = (x: Demo) => x.id % 5 !== 0;
@@ -276,13 +276,13 @@ const byTag = (x: Demo) => x.id % 7 === 2;
 const noPurl = (x: Demo) => x.id % 4;
 function dtBricksOf(x: Demo) {
   return BRICKS.includes(x) ? TREES.filter((t) => t.active).map((t) => ({ tree: t.name, env: t.env, uuid: `${t.uuid}-${x.id}`, version: versionOf(x, t),
-    sbom: sbom(x), by_tag: t.env === "prod" && byTag(x), components: sbom(x) ? 120 + x.id % 90 : null, no_purl: sbom(x) ? noPurl(x) : null })) : null;
+    sbom: sbom(x), by_tag: t.uuid === "t-prod" && byTag(x), components: sbom(x) ? 120 + x.id % 90 : null, no_purl: sbom(x) ? noPurl(x) : null })) : null;
 }
 const where = (x: Demo, t: (typeof TREES)[number], f: { key: string }) => `${brickName(x)} ${versionOf(x, t)} · ${f.key === "CVE-2021-44228" ? "org.apache.logging.log4j:log4j-core@2.14.1" : "dépendance"}`;
 function dtVersion(t: (typeof TREES)[number]) {
   const found = new Map<string, { key: string; cve: boolean; title: string; severity: string; response: string; kev: boolean; epss: number | null; where: string[] }>();
   for (const x of BRICKS) for (const f of dtFindings(x, t)) {
-    const g = found.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, response: responseOf(f, t.env === "test" ? ["test"] : ["prod"]), kev: KEV.has(f.key), epss: epssOf(f.key), where: [] };
+    const g = found.get(f.key) ?? { key: f.key, cve: f.cve, title: f.title, severity: f.severity, response: responseOf(f, t.uuid === "t-test" ? ["test"] : ["prod"]), kev: KEV.has(f.key), epss: epssOf(f.key), where: [] };
     g.where.push(where(x, t, f));
     found.set(f.key, g);
   }
@@ -296,15 +296,15 @@ const treeOf = (uuid: string | null) => {
 const treeRow = (t: (typeof TREES)[number]) => ({ uuid: t.uuid, name: t.name, env: t.env, active: t.active, synced_at: iso(NOW - 1800_000) });
 const EXCEPTIONS = () => BRICKS.slice(0, 3).map((x, i) => ({ key: ["CVE-2023-26136", "CVE-2020-8908", "CVE-2024-28849"][i], title: null, severity: (["medium", "low", "medium"] as const)[i],
   kind: "exception", state: "EXPLOITABLE", justification: null, response: "WILL_NOT_FIX", detail: ["Correctif bloqué par le fournisseur, contournement en place (proxy)", "Répertoire temporaire jamais utilisé en prod", "Risque accepté jusqu'à la migration de la brique"][i],
-  analysed_at: iso(NOW - [120, 40, 100][i] * DAY), expires_on: iso(NOW + [-30, 50, -10][i] * DAY).slice(0, 10), expired: [true, false, true][i], brick: brickName(x), version: versionOf(x, TREES[0]), tree: "CMS · prod", instance: x.instance, path: x.path }));
+  analysed_at: iso(NOW - [120, 40, 100][i] * DAY), expires_on: iso(NOW + [-30, 50, -10][i] * DAY).slice(0, 10), expired: [true, false, true][i], brick: brickName(x), version: versionOf(x, TREES[0]), tree: "CMS 5.2.0", instance: x.instance, path: x.path }));
 const NOT_CONCERNED = () => BRICKS.slice(2, 5).map((x, i) => ({ key: ["CVE-2023-4863", "CVE-2021-23337", "CVE-2022-24999"][i], title: null, severity: "high", kind: "not_concerned", state: "NOT_AFFECTED",
   justification: ["CODE_NOT_REACHABLE", "CODE_NOT_PRESENT", "PROTECTED_AT_PERIMETER"][i], response: null, detail: ["libwebp présente dans l'image de base, jamais chargée", "Fonction template() non utilisée", "Parseur exposé derrière le proxy qui filtre"][i],
-  analysed_at: iso(NOW - (10 + 20 * i) * DAY), expires_on: null, expired: null, brick: brickName(x), version: versionOf(x, TREES[0]), tree: "CMS · prod", instance: x.instance, path: x.path }));
+  analysed_at: iso(NOW - (10 + 20 * i) * DAY), expires_on: null, expired: null, brick: brickName(x), version: versionOf(x, TREES[0]), tree: "CMS 5.2.0", instance: x.instance, path: x.path }));
 
 function dtRoute(p: string, q: URLSearchParams): unknown {
   if (p === "/dt/work") {
     const mine = BRICKS.filter((x) => inScope(q).includes(x));
-    const ref = (x: Demo) => ({ uuid: `t-prod-${x.id}`, name: brickName(x), version: versionOf(x, TREES[0]), components: 120 + x.id % 90, no_purl: noPurl(x), tree: "CMS · prod", instance: x.instance, path: x.path });
+    const ref = (x: Demo) => ({ uuid: `t-prod-${x.id}`, name: brickName(x), version: versionOf(x, TREES[0]), components: 120 + x.id % 90, no_purl: noPurl(x), tree: "CMS 5.2.0", instance: x.instance, path: x.path });
     return { configured: true, synced_at: iso(NOW - 1800_000), no_sbom: mine.filter((x) => !sbom(x)).map(ref), by_tag: mine.filter(byTag).map(ref),
       no_purl: mine.filter((x) => sbom(x) && noPurl(x)).map(ref), expired_exceptions: EXCEPTIONS().filter((e) => e.expired && mine.some((x) => x.path === e.path)).length,
       stale_sources: [{ name: "NVD", completed_at: iso(Date.now() - 4 * DAY), via: "dependency-track" }] };
@@ -317,7 +317,7 @@ function dtRoute(p: string, q: URLSearchParams): unknown {
   if (one) {
     const t = treeOf(one[1]);
     return { tree: treeRow(t), findings: dtVersion(t), bricks: BRICKS.map((x) => ({ uuid: `${t.uuid}-${x.id}`, name: brickName(x), version: versionOf(x, t), active: t.active, sbom: sbom(x),
-      by_tag: t.env === "prod" && byTag(x), components: sbom(x) ? 120 + x.id % 90 : null, no_purl: sbom(x) ? noPurl(x) : null, instance: x.instance, path: x.path })) };
+      by_tag: t.uuid === "t-prod" && byTag(x), components: sbom(x) ? 120 + x.id % 90 : null, no_purl: sbom(x) ? noPurl(x) : null, instance: x.instance, path: x.path })) };
   }
   if (p === "/dt/compare") {
     const a = treeOf(q.get("a")), b = treeOf(q.get("b")), fa = dtVersion(a), fb = dtVersion(b);
@@ -333,9 +333,9 @@ function dtRoute(p: string, q: URLSearchParams): unknown {
       const row = { tree: t.name, env: t.env, tree_active: t.active, brick: brickName(x), version: versionOf(x, t), active: true };
       if (f) places.push({ ...row, tree_uuid: t.uuid, instance: x.instance, path: x.path, component_name: key === "CVE-2021-44228" ? "org.apache.logging.log4j:log4j-core" : "dépendance",
         component_version: key === "CVE-2021-44228" ? "2.14.1" : "1.0", title: f.title, severity: f.severity, vector: null, kev: KEV.has(key), epss: epssOf(key),
-        state: t.env === "prod" && x === BRICKS[0] ? "IN_TRIAGE" : null, analysis_response: t.env === "prod" && x === BRICKS[0] ? "UPDATE" : null,
-        justification: null, detail: t.env === "prod" && x === BRICKS[0] ? "Patch ciblé livré hors cycle (log4j 2.17.1), version corrigée en qualification" : null,
-        analysed_at: t.env === "prod" && x === BRICKS[0] ? iso(NOW - 2 * DAY) : null, expires_on: null, attributed_at: f.detected_at, status: "open", response: responseOf(f, t.env === "test" ? ["test"] : ["prod"]) });
+        state: t.uuid === "t-prod" && x === BRICKS[0] ? "IN_TRIAGE" : null, analysis_response: t.uuid === "t-prod" && x === BRICKS[0] ? "UPDATE" : null,
+        justification: null, detail: t.uuid === "t-prod" && x === BRICKS[0] ? "Patch ciblé livré hors cycle (log4j 2.17.1), version corrigée en qualification" : null,
+        analysed_at: t.uuid === "t-prod" && x === BRICKS[0] ? iso(NOW - 2 * DAY) : null, expires_on: null, attributed_at: f.detected_at, status: "open", response: responseOf(f, t.uuid === "t-test" ? ["test"] : ["prod"]) });
       else if (places.some((pl) => pl.brick === brickName(x)) || BRICKS.some((y) => y === x && (y.findings ?? []).some((v) => v.key === key))) fixed.push(row);
     }
     for (const x of PROJECTS) for (const f of x.findings ?? []) if (f.key === key) ledger.push({ instance: x.instance, path: x.path, opened_at: f.detected_at, closed_at: null,

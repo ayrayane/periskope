@@ -91,7 +91,7 @@ vulnFeeds:   # with Internet access (direct, or through proxy)
 
 Without Internet, the same two files copied daily to an internal web server, and their URLs there (gzipped or plain CSV).
 A URL may hold `{date}` (YYYY-MM-DD, UTC) for a daily archive, e.g. a pipeline that drops one file a day in a Nexus raw
-repository: Periskope reads the most recent of the last 7 days, so a missed day is not a gap. Such a pipeline: [`docs/vuln-feeds.gitlab-ci.yml`](docs/vuln-feeds.gitlab-ci.yml).
+repository: Periskope reads the most recent of the last 7 days, so a missed day is not a gap.
 
 ```yaml
 vulnFeeds:
@@ -111,12 +111,15 @@ With `dependencyTrack.url`, the scheduler reads DT every hour, read only (an API
 VIEW_VULNERABILITY and SYSTEM_CONFIGURATION_READ, the last one to read when the CVE sources were last mirrored; Secret
 `periskope-dtrack`, key `apiKey`):
 
-- **Trees**: each root project with children. `CMS · prod|test|dev` is an environment (built by the GitOps job), any other root
-  (`CMS · 5.2.0 (livraison JAR)`) a delivered version, counted as prod. Root projects without children (the bricks' « build »
-  projects) are ignored. Inactive trees and bricks stay visible as versions, never as open vulnerabilities.
-- **Bricks** are matched to GitLab projects of `dependencyTrack.instance` by name: the GitLab path (`cms/brique-a`), else a last
-  path segment unique in the instance. A brick without SBOM, or tagged `deploiement-par-tag` by the GitOps job, is listed in
-  « Travail à faire »; so are bricks with components without purl.
+- **Projects**: DT mirrors GitLab, each project named by its full GitLab path (`cms/back/brique-a`) and versioned; groups and
+  projects of no GitLab path of `dependencyTrack.instance` are ignored.
+- **Delivered versions**: a DT collection project (DT 4.13+), named after the CMS, its version the delivery's, whose children are
+  the brick versions the GitOps repository chose (neither the latest nor the same number). Periskope reads every collection by
+  itself; a delivered version counts as production. Its bricks feed the production evidence (version, SBOM, deployment by digest)
+  and the CVE exposure. A project in no delivered version counts its latest SBOM, without environment (its GitLab topics tell the
+  exposure, and stay the fallback of the production evidence). A brick without SBOM, or tagged `deploiement-par-tag` by the GitOps
+  job, is listed in « Travail à faire »; so are bricks with components without purl. DT keeps one parent per project: one brick
+  version cannot sit in two collections.
 - **Findings**: DT's replace GitLab's dependency and container findings (GitLab keeps SAST, secrets and DAST), one per CVE (a GHSA
   is keyed by its CVE alias). KEV and EPSS come from Periskope's feeds, else from DT. A finding analysed `NOT_AFFECTED` or
   `FALSE_POSITIVE` is « non concernée » (VEX); a suppressed one, or one answered `WILL_NOT_FIX`/`CAN_NOT_FIX`, is an exception
@@ -151,7 +154,6 @@ Periskope itself calls only GitLab, Keycloak and the two feed URLs: no CDN, no w
    and only if enabled KEDA (`keda`), Crossplane (`crossplane`) and the Prometheus operator (`monitoring`).
 4. **Private CA** of Keycloak, GitLab and Nexus: a ConfigMap with `ca.crt`, named in `oidc.caConfigMap`.
 5. **Dependency-Track**: its own mirrors of NVD, GitHub and OSV (daily copy in Nexus); Periskope only needs DT's URL.
-6. **KEV and EPSS**: the daily Nexus copy above (`{date}` URLs and [`docs/vuln-feeds.gitlab-ci.yml`](docs/vuln-feeds.gitlab-ci.yml)
-   on a runner that has Internet). Without it, Periskope works and priority is GitLab's severity alone.
+6. **KEV and EPSS**: the daily Nexus copy above (`{date}` URLs, filled by a scheduled job on a runner that has Internet). Without it, Periskope works and priority is GitLab's severity alone.
 
 The only link out is « Fiche NVD » on a CVE (nvd.nist.gov, opened in the user's browser): dead without Internet, nothing else depends on it.

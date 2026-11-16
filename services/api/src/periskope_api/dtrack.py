@@ -1,4 +1,4 @@
-"""Dependency-Track views: delivered versions and their comparison, the follow-up sheet of a CVE, exceptions and VEX,
+"""Dependency-Track views: the delivered versions (collection projects) and their comparison, the follow-up sheet of a CVE, exceptions and VEX,
 DT's work items, and the indicators for management. A viewer sees only the bricks of the projects they may see.
 
 No `from __future__ import annotations` here: FastAPI resolves the closure-local dependencies from real annotations."""
@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from periskope_core.settings import env
 from periskope_db import Viewer
 from periskope_db import settings as hot
+from periskope_db.dt import OUTSIDE
 
 # Status of a DT finding: open, not concerned (VEX: not affected, false positive), an accepted exception, or resolved.
 STATUS = ("CASE WHEN f.state = 'RESOLVED' THEN 'resolved' WHEN f.state IN ('NOT_AFFECTED', 'FALSE_POSITIVE') THEN 'not_concerned'"
@@ -25,7 +26,7 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
     r = APIRouter(prefix="/api/v1")
 
     async def response_sql() -> str:
-        """SSVC response of DT finding f in tree t: exposed when the tree is prod or a delivered version."""
+        """SSVC response of DT finding f in tree t: a delivered version runs in prod; outside them, no environment is known: counted as prod."""
         threshold = (await hot.load(state["db"])).epss_high_pct / 100
         return f"ssvc(f.kev OR k.cve IS NOT NULL, coalesce(e.score, f.epss), {threshold}, f.severity, f.vector, coalesce(t.env, 'prod') = 'prod')"
 
@@ -42,9 +43,9 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
         if not env("DT_URL", ""):
             return {"configured": False}
         cond, params = visible(me, instance, namespace, environment)
-        brick = ("SELECT b.uuid, b.name, b.version, b.components, b.no_purl, t.name AS tree, p.instance, p.path FROM dt_projects b"
-                 " JOIN dt_projects t ON t.uuid = b.root LEFT JOIN projects p ON p.id = b.project_id"
-                 f" WHERE b.kind = 'brick' AND b.active AND t.active AND {cond}")
+        brick = ("SELECT b.uuid, b.name, b.version, b.components, b.no_purl, t.name AS tree, p.instance, p.path FROM dt_bricks b"
+                 " JOIN dt_trees t ON t.uuid = b.root LEFT JOIN projects p ON p.id = b.project_id"
+                 f" WHERE b.active AND t.active AND {cond}")
         db = state["db"]
         no_sbom = await db.fetch(f"{brick} AND b.bom_at IS NULL ORDER BY t.name, b.name LIMIT 200", *params)
         by_tag = await db.fetch(f"{brick} AND b.by_tag ORDER BY t.name, b.name LIMIT 200", *params)
@@ -59,7 +60,7 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
 
     @r.get("/dt/versions")
     async def versions(me: Me) -> list[dict]:
-        """Every tree of DT, environments first: the visible bricks it holds and their open findings."""
+        """Every delivered version: the visible bricks it holds and their open findings."""
         cond, params = visible(me)
         response = await response_sql()
         rows = await state["db"].fetch(
@@ -67,28 +68,28 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
             f" count(DISTINCT b.uuid) FILTER (WHERE b.bom_at IS NULL) AS no_sbom,"
             f" count(DISTINCT f.key) FILTER (WHERE {STATUS} = 'open') AS open,"
             f" count(DISTINCT f.key) FILTER (WHERE {STATUS} = 'open' AND {response} = 'immediate') AS immediate"
-            f" FROM dt_projects t JOIN dt_projects b ON b.root = t.uuid AND b.kind = 'brick'"
+            f" FROM dt_trees t JOIN dt_bricks b ON b.root = t.uuid"
             f" LEFT JOIN dt_findings f ON f.project = b.uuid {JOIN_FEEDS}"
-            f" WHERE t.kind = 'tree' AND {cond} GROUP BY t.uuid ORDER BY t.env IS NULL, t.env, t.active DESC, t.name DESC", *params)
+            f" WHERE {cond} GROUP BY t.uuid, t.name, t.env, t.active, t.synced_at ORDER BY t.env, t.active DESC, t.name DESC", *params)
         return [dict(x) for x in rows]
 
     async def tree_findings(me: Viewer, uuid: str) -> tuple[dict, list[dict], list[dict]]:
         cond, params = visible(me)
         db = state["db"]
-        tree = await db.fetchrow("SELECT uuid, name, env, active, synced_at FROM dt_projects WHERE uuid = $1 AND kind = 'tree'", uuid)
+        tree = await db.fetchrow("SELECT uuid, name, env, active, synced_at FROM dt_trees WHERE uuid = $1", uuid)
         if tree is None:
             raise HTTPException(404, "version introuvable")
         params = [*params, uuid]
         n = f"${len(params)}"
         bricks = await db.fetch(
             "SELECT b.uuid, b.name, b.version, b.active, b.bom_at IS NOT NULL AS sbom, b.by_tag, b.components, b.no_purl, p.instance, p.path"
-            f" FROM dt_projects b LEFT JOIN projects p ON p.id = b.project_id WHERE b.root = {n} AND b.kind = 'brick' AND {cond} ORDER BY b.name", *params)
+            f" FROM dt_bricks b LEFT JOIN projects p ON p.id = b.project_id WHERE b.root = {n} AND {cond} ORDER BY b.name", *params)
         response = await response_sql()
         found = await db.fetch(
             f"SELECT f.key, bool_or(f.cve) AS cve, min(f.title) AS title, min({SEV}) AS rank, min(array_position(ARRAY['immediate', 'out_of_cycle', 'scheduled', 'deferred'], {response})) AS rrank,"
             f" bool_or(f.kev OR k.cve IS NOT NULL) AS kev, max(coalesce(e.score, f.epss)) AS epss,"
             f" array_agg(DISTINCT b.name || ' ' || coalesce(b.version, '') || ' · ' || coalesce(f.component_name, '') || '@' || coalesce(f.component_version, '')) AS where_"
-            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project JOIN dt_projects t ON t.uuid = b.root {JOIN_FEEDS}"
+            f" FROM dt_findings f JOIN dt_bricks b ON b.uuid = f.project JOIN dt_trees t ON t.uuid = b.root {JOIN_FEEDS}"
             f" WHERE b.root = {n} AND b.active AND {STATUS} = 'open' AND {cond} GROUP BY f.key ORDER BY rrank, rank, f.key", *params)
         sev = ("critical", "high", "medium", "low", "info", "unknown")
         resp = ("immediate", "out_of_cycle", "scheduled", "deferred")
@@ -114,24 +115,24 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
 
     @r.get("/dt/cve/{key}")
     async def cve(key: str, me: Me) -> dict:
-        """The follow-up sheet of a CVE: every version where DT found it with its analysis, the versions of those bricks that no longer
-        carry it, and the ledger of the projects (opened, closed, deadline)."""
+        """The follow-up sheet of a CVE: every running version where DT found it with its analysis (in a delivered version, else outside any), the
+        declared versions of those bricks that no longer carry it, and the ledger of the projects (opened, closed, deadline)."""
         cond, params = visible(me)
         db = state["db"]
         params = [*params, key]
         n = f"${len(params)}"
         response = await response_sql()
         places = await db.fetch(
-            f"SELECT t.uuid AS tree_uuid, t.name AS tree, t.env, t.active AS tree_active, b.name AS brick, b.version, b.active, p.instance, p.path,"
+            f"SELECT t.uuid AS tree_uuid, coalesce(t.name, '{OUTSIDE}') AS tree, CASE WHEN t.uuid IS NULL THEN 'none' END AS env, coalesce(t.active, true) AS tree_active, b.name AS brick, b.version, b.active, p.instance, p.path,"
             f" f.component_name, f.component_version, f.title, f.severity, f.vector, f.kev OR k.cve IS NOT NULL AS kev, coalesce(e.score, f.epss) AS epss,"
             f" f.state, f.response AS analysis_response, f.justification, f.detail, f.analysed_at, f.expires_on, f.attributed_at,"
             f" {STATUS} AS status, {response} AS response"
-            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project JOIN dt_projects t ON t.uuid = b.root LEFT JOIN projects p ON p.id = b.project_id"
-            f" {JOIN_FEEDS} WHERE f.key = {n} AND {cond} ORDER BY t.env IS NULL, t.env, t.name DESC, b.name", *params)
-        # Same bricks, in a tree or version where the CVE is absent: the versions already updated.
+            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project LEFT JOIN dt_bricks m ON m.uuid = b.uuid LEFT JOIN dt_trees t ON t.uuid = m.root"
+            f" LEFT JOIN projects p ON p.id = b.project_id {JOIN_FEEDS} WHERE f.key = {n} AND {cond} ORDER BY t.env IS NULL, t.env, t.name DESC, b.name", *params)
+        # Same bricks, in a delivered version where the CVE is absent: the versions already updated.
         fixed = await db.fetch(
-            f"SELECT DISTINCT t.name AS tree, t.env, t.active AS tree_active, b.name AS brick, b.version, b.active FROM dt_projects b JOIN dt_projects t ON t.uuid = b.root"
-            f" WHERE b.kind = 'brick' AND b.bom_at IS NOT NULL AND {cond} AND b.name IN (SELECT x.name FROM dt_findings g JOIN dt_projects x ON x.uuid = g.project WHERE g.key = {n})"
+            f"SELECT DISTINCT t.name AS tree, t.env, t.active AS tree_active, b.name AS brick, b.version, b.active FROM dt_bricks b JOIN dt_trees t ON t.uuid = b.root"
+            f" WHERE b.bom_at IS NOT NULL AND {cond} AND b.project_id IN (SELECT x.project_id FROM dt_findings g JOIN dt_projects x ON x.uuid = g.project WHERE g.key = {n})"
             f" AND NOT EXISTS (SELECT 1 FROM dt_findings g WHERE g.project = b.uuid AND g.key = {n}) ORDER BY b.name, b.version", *params)
         where, lparams = scoped(me, None, None)
         lparams = [*lparams, key]
@@ -148,9 +149,9 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
         cond, params = visible(me, instance, namespace, environment)
         rows = await state["db"].fetch(
             f"SELECT f.key, f.title, f.severity, {STATUS} AS kind, f.state, f.justification, f.response, f.detail, f.analysed_at, f.expires_on,"
-            f" f.expires_on < current_date AS expired, b.name AS brick, b.version, t.name AS tree, p.instance, p.path"
-            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project JOIN dt_projects t ON t.uuid = b.root LEFT JOIN projects p ON p.id = b.project_id"
-            f" WHERE b.active AND t.active AND {STATUS} IN ('exception', 'not_concerned') AND {cond}"
+            f" f.expires_on < current_date AS expired, b.name AS brick, b.version, coalesce(t.name, '{OUTSIDE}') AS tree, p.instance, p.path"
+            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project LEFT JOIN dt_bricks m ON m.uuid = b.uuid LEFT JOIN dt_trees t ON t.uuid = m.root"
+            f" LEFT JOIN projects p ON p.id = b.project_id WHERE b.active AND coalesce(t.active, true) AND {STATUS} IN ('exception', 'not_concerned') AND {cond}"
             f" ORDER BY {STATUS}, f.expires_on NULLS LAST, f.key, b.name LIMIT 2000", *params)
         items = [dict(x) for x in rows]
         return {"exceptions": [x for x in items if x["kind"] == "exception"], "not_concerned": [x for x in items if x["kind"] == "not_concerned"]}
@@ -175,12 +176,11 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
             f" LEFT JOIN (vuln_ledger l JOIN projects p ON p.id = l.project_id AND {where}) ON true GROUP BY m.month ORDER BY m.month", *params, months)
         cond, bparams = visible(me, instance, namespace, environment)
         sbom = await db.fetchrow(
-            f"SELECT count(*) AS bricks, count(*) FILTER (WHERE b.bom_at IS NOT NULL) AS with_sbom FROM dt_projects b JOIN dt_projects t ON t.uuid = b.root"
-            f" WHERE b.kind = 'brick' AND b.active AND t.active AND coalesce(t.env, 'prod') = 'prod' AND {cond}", *bparams)
+            f"SELECT count(*) AS bricks, count(*) FILTER (WHERE b.bom_at IS NOT NULL) AS with_sbom FROM dt_bricks b JOIN dt_trees t ON t.uuid = b.root"
+            f" WHERE b.active AND t.active AND coalesce(t.env, 'prod') = 'prod' AND {cond}", *bparams)
         exc = await db.fetchrow(
             f"SELECT count(*) FILTER (WHERE f.expires_on >= current_date) AS active, count(*) FILTER (WHERE f.expires_on < current_date) AS expired"
-            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project JOIN dt_projects t ON t.uuid = b.root"
-            f" WHERE b.active AND t.active AND {STATUS} = 'exception' AND {cond}", *bparams)
+            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project WHERE b.active AND {STATUS} = 'exception' AND {cond}", *bparams)
         return {"months": [{"month": x["month"].date().isoformat(), "critical_fixed": x["critical_fixed"], "critical_on_time": x["critical_on_time"],
                             "days": {k: None if x[f"days_{k}"] is None else round(float(x[f"days_{k}"]), 1) for k in ("critical", "high", "medium", "low")}, "overdue_stock": x["overdue_stock"]} for x in monthly],
                 "sbom": dict(sbom) if env("DT_URL", "") else None, "exceptions": dict(exc) if env("DT_URL", "") else None}

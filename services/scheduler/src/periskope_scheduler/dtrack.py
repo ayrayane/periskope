@@ -1,9 +1,9 @@
-"""Dependency-Track, read only: the trees the GitOps job (and the JAR delivery job) builds, their bricks, components and findings,
-the analyses (VEX, exceptions) and the freshness of its vulnerability sources. Periskope never writes to DT."""
+"""Dependency-Track, read only: its projects of a GitLab path, the delivered versions (collection projects the GitOps repository
+fills) and their bricks, the components and findings of the versions that run, the analyses (VEX, exceptions) and the freshness
+of its vulnerability sources. Periskope never writes to DT."""
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -12,15 +12,11 @@ import httpx
 import structlog
 from periskope_core.settings import env, secret
 from periskope_db import settings as hot
+from periskope_db.dt import SEVERITIES, is_exception, rebuild
 
 log = structlog.get_logger()
 
 PAGE = 500
-# A tree « CMS · prod » is an environment; any other root with children is a delivered version (« CMS · 5.2.0 (livraison JAR) »).
-ENV_TREE = re.compile(r"·\s*(prod|test|dev)\s*$", re.IGNORECASE)
-NOT_CONCERNED = {"NOT_AFFECTED", "FALSE_POSITIVE"}
-CLOSED = NOT_CONCERNED | {"RESOLVED"}
-SEVERITIES = ("critical", "high", "medium", "low", "info", "unknown")
 # The end date of an exception, written in its DT analysis detail (from the VEX file): « expire 2027-03-01 », « échéance : … ».
 EXPIRES = re.compile(r"(?:expir\w*|échéance|until|jusqu'au)\D{0,15}(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
 
@@ -86,66 +82,68 @@ async def analysis(dt: httpx.AsyncClient, project: str, row: dict, exception_day
                              else (row["analysed_at"] or datetime.now(UTC)).date() + timedelta(days=exception_days))
 
 
-def is_exception(row: dict) -> bool:
-    """An accepted risk: hidden or answered « will not / can not fix » without being declared not concerned or resolved."""
-    return row.get("state") not in CLOSED and (row.get("suppressed") or row.get("response") in ("WILL_NOT_FIX", "CAN_NOT_FIX"))
-
-
-def is_open(row: dict) -> bool:
-    return row.get("state") not in CLOSED and not is_exception(row)
-
-
 async def link(db: asyncpg.Pool, instance: str) -> dict[str, int]:
-    """DT brick name → Periskope project: the GitLab path (« cms/brique-a »), else a last path segment unique in the instance."""
-    rows = await db.fetch("SELECT id, path FROM projects WHERE instance = $1", instance)
-    names = {r["path"].lower(): r["id"] for r in rows}
-    last: dict[str, list[int]] = defaultdict(list)
-    for r in rows:
-        last[r["path"].rsplit("/", 1)[-1].lower()].append(r["id"])
-    return names | {k: v[0] for k, v in last.items() if len(v) == 1 and k not in names}
+    """DT project name → Periskope project: DT mirrors GitLab, each project named by its full path (« cms/back/brique-a »)."""
+    return {r["path"].lower(): r["id"] for r in await db.fetch("SELECT id, path FROM projects WHERE instance = $1", instance)}
 
 
 async def sync(db: asyncpg.Pool, dt: httpx.AsyncClient | None = None) -> dict[str, int]:
-    """Reads every tree of DT into dt_projects and dt_findings, then rebuilds each project's open findings (dt_state)."""
+    """Reads the collection projects into dt_collections, their bricks and the DT projects of a GitLab path into dt_projects, the
+    findings of the versions that run (the collections' bricks, else the project's latest SBOM) into dt_findings, then rebuilds
+    each project's open findings."""
     if dt is None:
         async with client() as c:
             return await sync(db, c)
     conf = await hot.load(db)
     projects = await link(db, env("DT_INSTANCE", ""))
     known = {r["uuid"]: r for r in await db.fetch("SELECT uuid, bom_at, components, no_purl FROM dt_projects")}
-    roots = [r for r in await pages(dt, "/v1/project", onlyRoot="true", excludeInactive="false") if r.get("hasChildren")]
+    every = {p["uuid"]: p for p in await pages(dt, "/v1/project", excludeInactive="false")}
+    # A delivered version: a collection project (DT 4.13+), named after the product, its version the delivery's.
+    collections = [p for p in every.values() if p.get("collectionLogic") not in (None, "NONE")]
+    # A brick is a child of a collection, whatever its name; any other project counts only under a GitLab path.
+    bricks = {c["uuid"]: {**c, "parent": {"uuid": k["uuid"]}} for k in collections
+              for c in await pages(dt, f"/v1/project/{k['uuid']}/children", excludeInactive="false")}
+    kept = bricks | {u: p for u, p in every.items() if p["name"].lower() in projects and u not in bricks}
+    latest: dict[int, dict] = {}
+    for p in kept.values():
+        pid = projects.get(p["name"].lower())
+        if pid and p["uuid"] not in bricks and p.get("active", True) and p.get("lastBomImport") and p["lastBomImport"] > (latest.get(pid) or {}).get("lastBomImport", 0):
+            latest[pid] = p
+    in_links = {projects.get(c["name"].lower()) for c in bricks.values()}
     rows: list[tuple] = []
     findings: dict[str, list[dict]] = {}
-    for tree in roots:
-        match = ENV_TREE.search(tree["name"])
-        rows.append((tree["uuid"], tree["name"], tree.get("version"), tree["uuid"], None, "tree", match.group(1).lower() if match else None,
-                     tree.get("active", True), ms(tree.get("lastBomImport")), False, None, None, None))
-        for brick in await pages(dt, f"/v1/project/{tree['uuid']}/children", excludeInactive="false"):
-            bom_at = ms(brick.get("lastBomImport"))
-            before = known.get(brick["uuid"])
+    for p in kept.values():
+        pid = projects.get(p["name"].lower())
+        bom_at = ms(p.get("lastBomImport"))
+        tags = {t.get("name", "").lower() for t in p.get("tags") or []}
+        components = no_purl = None
+        runs = p["uuid"] in bricks or (pid not in in_links and latest.get(pid) is p)
+        if runs and bom_at:
+            before = known.get(p["uuid"])
             # Components change only with a new SBOM: counted again only then.
             if before and before["bom_at"] == bom_at and before["components"] is not None:
                 components, no_purl = before["components"], before["no_purl"]
-            elif bom_at:
-                parts = await pages(dt, f"/v1/component/project/{brick['uuid']}")
-                components, no_purl = len(parts), sum(1 for p in parts if not p.get("purl"))
             else:
-                components = no_purl = None
-            tags = {t.get("name", "").lower() for t in brick.get("tags") or []}
-            rows.append((brick["uuid"], brick["name"], brick.get("version"), tree["uuid"], tree["uuid"], "brick", None, brick.get("active", True),
-                         bom_at, "deploiement-par-tag" in tags, components, no_purl, projects.get(brick["name"].lower())))
-            found = [finding_row(f) for f in await pages(dt, f"/v1/finding/project/{brick['uuid']}", suppressed="true")]
+                parts = await pages(dt, f"/v1/component/project/{p['uuid']}")
+                components, no_purl = len(parts), sum(1 for c in parts if not c.get("purl"))
+            found = [finding_row(f) for f in await pages(dt, f"/v1/finding/project/{p['uuid']}", suppressed="true")]
             for row in found:
                 if row["state"] not in (None, "NOT_SET") or row["suppressed"]:
-                    await analysis(dt, brick["uuid"], row, conf.exception_days)
-            findings[brick["uuid"]] = found
+                    await analysis(dt, p["uuid"], row, conf.exception_days)
+            findings[p["uuid"]] = found
+        rows.append((p["uuid"], p["name"], p.get("version"), (p.get("parent") or {}).get("uuid"), p.get("active", True), bom_at,
+                     "deploiement-par-tag" in tags, components, no_purl, pid))
     async with db.acquire() as conn, conn.transaction():
+        await conn.execute("DELETE FROM dt_collections")
+        await conn.executemany("INSERT INTO dt_collections (uuid, name, version, active) VALUES ($1, $2, $3, $4)",
+                               [(k["uuid"], k["name"], k.get("version"), k.get("active", True)) for k in collections])
         await conn.execute("DELETE FROM dt_projects WHERE NOT (uuid = ANY($1::text[]))", [r[0] for r in rows])
         await conn.executemany(
-            "INSERT INTO dt_projects (uuid, name, version, root, parent, kind, env, active, bom_at, by_tag, components, no_purl, project_id, synced_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now()) ON CONFLICT (uuid) DO UPDATE SET name = $2, version = $3, root = $4,"
-            " parent = $5, kind = $6, env = $7, active = $8, bom_at = $9, by_tag = $10, components = $11, no_purl = $12, project_id = $13, synced_at = now()", rows)
-        await conn.execute("DELETE FROM dt_findings WHERE project = ANY($1::text[])", list(findings))
+            "INSERT INTO dt_projects (uuid, name, version, parent, active, bom_at, by_tag, components, no_purl, project_id, synced_at)"
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now()) ON CONFLICT (uuid) DO UPDATE SET name = $2, version = $3, parent = $4,"
+            " active = $5, bom_at = $6, by_tag = $7, components = $8, no_purl = $9, project_id = $10, synced_at = now()", rows)
+        # Findings of the versions no longer read are dropped with the others: only what runs is kept.
+        await conn.execute("DELETE FROM dt_findings")
         cols = ["project", "component", "vuln", "key", "cve", "severity", "title", "component_name", "component_version", "purl", "vector", "kev", "epss",
                 "state", "suppressed", "response", "justification", "detail", "analysed_at", "expires_on", "attributed_at"]
         # A component in two places of one SBOM is one finding.
@@ -153,44 +151,8 @@ async def sync(db: asyncpg.Pool, dt: httpx.AsyncClient | None = None) -> dict[st
         await conn.copy_records_to_table("dt_findings", records=records, columns=cols)
         await rebuild(conn)
     await sources(db, dt)
-    log.info("dt_synced", trees=len(roots), bricks=len(rows) - len(roots), findings=sum(map(len, findings.values())))
-    return {"trees": len(roots), "bricks": len(rows) - len(roots)}
-
-
-async def rebuild(conn: asyncpg.Connection) -> None:
-    """Each project's open findings across the running bricks of every tree, one per CVE, with the environments it runs in."""
-    rows = await conn.fetch(
-        "SELECT b.project_id, b.uuid, b.name, b.version, b.bom_at, b.by_tag, b.components, b.no_purl, t.name AS tree, coalesce(t.env, 'prod') AS env,"
-        " t.env IS NULL AS delivery FROM dt_projects b JOIN dt_projects t ON t.uuid = b.root"
-        " WHERE b.kind = 'brick' AND b.active AND t.active AND b.project_id IS NOT NULL ORDER BY t.name, b.name")
-    found = defaultdict(list)
-    for f in await conn.fetch("SELECT * FROM dt_findings WHERE project = ANY($1::text[])", [r["uuid"] for r in rows]):
-        found[f["project"]].append(dict(f))
-    state: dict[int, dict[str, Any]] = defaultdict(lambda: {"findings": {}, "bricks": []})
-    for b in rows:
-        s = state[b["project_id"]]
-        s["bricks"].append({"tree": b["tree"], "env": None if b["delivery"] else b["env"], "uuid": b["uuid"], "version": b["version"],
-                            "sbom": b["bom_at"] is not None, "by_tag": b["by_tag"], "components": b["components"], "no_purl": b["no_purl"]})
-        for f in found[b["uuid"]]:
-            if not is_open(f):
-                continue
-            seen = f["attributed_at"].isoformat() if f["attributed_at"] else None
-            item = s["findings"].setdefault(f["key"], {"key": f["key"], "cve": f["cve"], "severity": f["severity"], "title": f["title"] or f["key"],
-                                                       "type": "dependency_track", "detected_at": seen, "envs": [], "trees": [], "components": [],
-                                                       "vector": f["vector"], "kev": False, "epss": None})
-            if SEVERITIES.index(f["severity"]) < SEVERITIES.index(item["severity"]):
-                item["severity"] = f["severity"]
-            if seen and (item["detected_at"] is None or seen < item["detected_at"]):
-                item["detected_at"] = seen
-            item["kev"] |= f["kev"]
-            item["epss"] = max(filter(lambda x: x is not None, (item["epss"], f["epss"])), default=None)
-            item["vector"] = item["vector"] or f["vector"]
-            for k, v in (("envs", b["env"]), ("trees", b["tree"]), ("components", f"{f['component_name']}@{f['component_version']}")):
-                if v not in item[k]:
-                    item[k].append(v)
-    await conn.execute("DELETE FROM dt_state")
-    await conn.executemany("INSERT INTO dt_state (project_id, findings, bricks) VALUES ($1, $2, $3)",
-                           [(p, list(s["findings"].values()), s["bricks"]) for p, s in state.items()])
+    log.info("dt_synced", collections=len(collections), projects=len(rows), read=len(findings), findings=sum(map(len, findings.values())))
+    return {"collections": len(collections), "projects": len(rows), "read": len(findings)}
 
 
 async def sources(db: asyncpg.Pool, dt: httpx.AsyncClient) -> None:

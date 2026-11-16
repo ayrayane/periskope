@@ -184,6 +184,8 @@ def test_every_registered_check_has_cases():
 
 async def test_all_pass_on_good_project(tmp_path):
     outcomes = await run_all(context(good(), tmp_path))
+    # Dependency-Track says what is delivered, not where it ran before: at best unknown.
+    assert outcomes.pop("dt.same_artifact").status == CheckStatus.UNKNOWN
     assert {k: o.message for k, o in outcomes.items() if o.status != CheckStatus.PASS} == {}
 
 
@@ -390,19 +392,12 @@ async def test_project_absent_from_production_trees_is_judged_on_its_topic(topic
     assert {o.status for o in outcomes.values()} == {status}, {k: o.message for k, o in outcomes.items()}
 
 
-async def test_delivery_is_production_but_has_no_environment_to_compare(tmp_path):
+async def test_version_in_no_delivery_is_analysed_but_not_production(tmp_path):
     data = good()
-    track(bricks=[{"tree": "CMS · 5.1.0 (livraison)", "env": None, "version": "1.1", "running": True, "by_tag": False, "sbom": True}])(data)
-    outcomes = await run_all(context(data, tmp_path), [*INVENTORY, "dt.same_artifact"])
-    assert [outcomes[i].status for i in INVENTORY] == [CheckStatus.PASS] * 3
-    assert outcomes["dt.same_artifact"].status == CheckStatus.UNKNOWN
-
-
-async def test_production_version_never_seen_in_test_fails(tmp_path):
-    data = good()
-    brick(0, version="1.3")(data)
-    outcome = (await run_all(context(data, tmp_path), ["dt.same_artifact"]))["dt.same_artifact"]
-    assert outcome.status == CheckStatus.FAIL and outcome.evidence == {"versions": ["CMS · prod : 1.3"]}
+    track(bricks=[{"tree": "Dependency-Track (hors version livrée)", "env": "none", "version": "1.1", "running": True, "by_tag": False, "sbom": True}])(data)
+    outcomes = await run_all(context(data, tmp_path), [*INVENTORY, "dt.same_artifact", "dt.sca"])
+    assert [outcomes[i].status for i in INVENTORY] == [CheckStatus.UNKNOWN] * 3 and "version livrée" in outcomes[INVENTORY[0]].message
+    assert outcomes["dt.same_artifact"].status == CheckStatus.UNKNOWN and outcomes["dt.sca"].status == CheckStatus.PASS
 
 
 async def test_ledger_measures(tmp_path):

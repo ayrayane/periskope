@@ -18,7 +18,7 @@ from periskope_clients.sonar import SonarDown, SonarQube
 from periskope_core.models import CheckStatus
 from periskope_core.scope import excluded
 from periskope_core.scoring import score
-from periskope_db import runs, scope
+from periskope_db import dt, runs, scope
 
 log = structlog.get_logger()
 RUN_TIMEOUT_S = 300
@@ -80,15 +80,12 @@ async def scope_for(db: asyncpg.Pool, instance: str, project_id: int) -> tuple[s
 
 
 async def tracking(db: asyncpg.Pool, instance: str, project_id: int) -> dict[str, Any]:
-    """What Periskope already stores about the project, for the checks that read no source: its versions in the Dependency-Track
-    trees (stopped ones included) and its vulnerability ledger."""
-    bricks = await db.fetch(
-        "SELECT t.name AS tree, t.env, b.version, b.active AND t.active AS running, b.by_tag, b.bom_at IS NOT NULL AS sbom"
-        " FROM dt_projects b JOIN dt_projects t ON t.uuid = b.root WHERE b.kind = 'brick' AND b.project_id = $1", project_id)
+    """What Periskope already stores about the project, for the checks that read no source: the versions that run (in the delivered
+    versions, else its latest SBOM) and its vulnerability ledger."""
     return {
-        # Dependency-Track follows the instance once one of its bricks is matched to a project of the instance.
+        # Dependency-Track follows the instance once DT holds a project of it.
         "dt": await db.fetchval("SELECT EXISTS (SELECT 1 FROM dt_projects d JOIN projects p ON p.id = d.project_id WHERE p.instance = $1)", instance),
-        "bricks": [dict(b) for b in bricks],
+        "bricks": [dt.brick(b) for b in await dt.running(db, project_id)],
         "followed": bool(await db.fetchval("SELECT vuln_findings IS NOT NULL FROM project_status WHERE project_id = $1", project_id)),
         "ledger": [dict(r) for r in await db.fetch("SELECT priority, opened_at, closed_at, deadline_at FROM vuln_ledger WHERE project_id = $1", project_id)],
     }

@@ -1,4 +1,5 @@
-"""The 7 checks read from what Periskope already stores: the Dependency-Track trees and the vulnerability ledger."""
+"""The 7 checks read from what Periskope already stores: the versions that run (its bricks in the delivered versions of Dependency-Track)
+and the vulnerability ledger."""
 from __future__ import annotations
 
 from collections import Counter
@@ -33,7 +34,7 @@ def label(b: dict[str, Any]) -> str:
 
 
 async def production(ctx: Context) -> tuple[list[dict[str, Any]], Outcome | None]:
-    """The project's versions running in production: in a « prod » tree or in a delivery (a tree without environment).
+    """The project's versions running in production: its bricks in a delivered version (a collection project, no environment).
     Without any, the GitLab topic says whether one was expected."""
     if (skip := unlinked(ctx)) is not None:
         return [], skip
@@ -42,10 +43,10 @@ async def production(ctx: Context) -> tuple[list[dict[str, Any]], Outcome | None
         return bricks, None
     topics = {"prod", "test", "dev"} & set((await ctx.project() or {}).get("topics") or [])
     if "prod" in topics:
-        return [], Outcome.fail("déclaré en production (topic prod) mais absent des arbres de production de Dependency-Track")
+        return [], Outcome.fail("déclaré en production (topic prod) mais dans aucune version livrée de Dependency-Track")
     if topics:
         return [], Outcome.not_applicable("projet hors production", topics=sorted(topics))
-    return [], Outcome.unknown("ni version en production dans Dependency-Track, ni topic prod, test ou dev sur le projet")
+    return [], Outcome.unknown("dans aucune version livrée de Dependency-Track (projet collection), et ni topic prod, test ou dev sur le projet")
 
 
 @check("dt.sca", Depends.LIVE, "Envoyer le SBOM de chaque version à Dependency-Track, ou activer Dependency Scanning dans la CI.")
@@ -86,13 +87,13 @@ async def fix_rate(ctx: Context) -> Outcome:
                       fixed=fixed, open=still)
 
 
-@check("dt.prod_component", Depends.LIVE, "Déclarer la version en production du projet dans l'arbre de production de Dependency-Track.")
+@check("dt.prod_component", Depends.LIVE, "Mettre la version livrée du projet dans le projet collection de son CMS, dans Dependency-Track (dépôt GitOps).")
 async def prod_component(ctx: Context) -> Outcome:
     bricks, skip = await production(ctx)
     return skip or Outcome.ok("composant suivi en production", versions=sorted(map(label, bricks)))
 
 
-@check("dt.prod_artifact", Depends.LIVE, "Donner sa version à chaque brique en production dans Dependency-Track.")
+@check("dt.prod_artifact", Depends.LIVE, "Donner sa version, dans Dependency-Track, à chaque brique en production.")
 async def prod_artifact(ctx: Context) -> Outcome:
     bricks, skip = await production(ctx)
     if skip:
@@ -102,7 +103,7 @@ async def prod_artifact(ctx: Context) -> Outcome:
     return Outcome.ok("version en production connue", versions=sorted(map(label, bricks)))
 
 
-@check("dt.prod_dependencies", Depends.LIVE, "Envoyer à Dependency-Track le SBOM de chaque version en production.")
+@check("dt.prod_dependencies", Depends.LIVE, "Envoyer à Dependency-Track le SBOM de chaque brique en production.")
 async def prod_dependencies(ctx: Context) -> Outcome:
     bricks, skip = await production(ctx)
     if skip:
@@ -114,17 +115,11 @@ async def prod_dependencies(ctx: Context) -> Outcome:
 
 @check("dt.same_artifact", Depends.LIVE, "Déployer en production, par digest, la version déjà déployée en test ou en dev.")
 async def same_artifact(ctx: Context) -> Outcome:
-    """A delivery has no test environment of its own: only the « prod » trees are judged."""
-    if (skip := unlinked(ctx)) is not None:
+    """Dependency-Track says what is delivered, not where it ran before: only a deployment by tag can be judged."""
+    bricks, skip = await production(ctx)
+    if skip:
         return skip
-    bricks = ctx.tracking["bricks"]
-    prod = [b for b in bricks if b["running"] and b["env"] == "prod"]
-    if not prod:
-        return Outcome.unknown("aucune version du projet dans un arbre de production de Dependency-Track")
-    if by_tag := sorted(label(b) for b in prod if b["by_tag"]):
+    if by_tag := sorted(label(b) for b in bricks if b["by_tag"]):
         return Outcome.fail("déployé par tag en production : l'image peut changer sans changer de version", versions=by_tag)
-    # Stopped versions count: the test tree has usually moved on when production catches up.
-    tested = {b["version"] for b in bricks if b["env"] in ("test", "dev")}
-    if untested := sorted(label(b) for b in prod if not b["version"] or b["version"] not in tested):
-        return Outcome.fail("version en production jamais vue en test ni en dev", versions=untested)
-    return Outcome.ok("les versions en production sont passées par test ou dev", versions=sorted(map(label, prod)))
+    return Outcome.unknown("version livrée déployée par digest ; son passage par test ou dev n'est pas connu de Dependency-Track",
+                           versions=sorted(map(label, bricks)))

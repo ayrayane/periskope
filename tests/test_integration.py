@@ -420,10 +420,11 @@ def test_other_team_reaches_nothing(client, db, tmp_path):
     async def analysed(gitlab_id):
         pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
         project_id = await pool.fetchval("SELECT id FROM projects WHERE gitlab_id = $1", gitlab_id)
-        # Its version in a production tree of Dependency-Track: the inventory of level 1 is measured, as for a compliant project.
-        await pool.execute("INSERT INTO dt_projects (uuid, name, root, kind, env) VALUES ($1, 'CMS · prod', $1, 'tree', 'prod')", f"tree-{gitlab_id}")
-        await pool.execute("INSERT INTO dt_projects (uuid, name, version, root, kind, bom_at, project_id) VALUES ($1, 'app', '1.2', $2, 'brick', now(), $3)",
-                           f"brick-{gitlab_id}", f"tree-{gitlab_id}", project_id)
+        # A brick, with its SBOM, of a delivered version (a DT collection project): the inventory of level 1 is measured.
+        link = f"coll-{gitlab_id}"
+        await pool.execute("INSERT INTO dt_collections (uuid, name, version, active) VALUES ($1, 'CMS', '5.2.0', true)", link)
+        await pool.execute("INSERT INTO dt_projects (uuid, name, version, parent, bom_at, project_id) VALUES ($1, 'app', '1.2', $2, now(), $3)",
+                           f"dt-{gitlab_id}", link, project_id)
         run = await runs.create(pool, project_id, "main", "user", "x")
         ctx = context(good(), tmp_path)
         await analyse(pool, ctx.gl, run, enterprise=True, sonar=ctx.sonar)

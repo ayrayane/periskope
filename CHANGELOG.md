@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.0 — 2026-11-16
+
+- Dependency-Track as it is organised in production: one DT project per GitLab repository, named by its full path (`group/subgroup/project`), its version the GitLab tag, at any depth. Before, only the direct children of a root project were read, and only a root named `… · prod|test|dev` was an environment: on such a DT nothing was linked and every production check stayed unknown.
+- A delivered version is a DT collection project, named after the CMS with the delivery's version, that the GitOps repository fills with the chosen brick versions. Periskope reads every collection by itself, nothing to link by hand, and counts a delivered version as production: `dt.prod_component`, `dt.prod_artifact`, `dt.prod_dependencies` and the CVE exposure read its bricks. GitLab topics stay the fallback. A project in no collection counts its latest SBOM, without environment.
+- `dt.same_artifact` can no longer compare with test or dev (DT says what is delivered, not where it ran before): it fails a brick deployed by tag and is unknown otherwise.
+- Only the versions that run are read in DT (components and findings): the collections' bricks and each other project's latest SBOM, not every version DT keeps.
+- The last-segment match (`lib` for `team-a/sub/lib`) is gone: a DT group could be taken for a project of the same name.
+- Migration 0011: `dt_collections`, the views `dt_trees` and `dt_bricks`; `dt_projects` loses `root`, `kind` and `env` and is read again at the next sync.
+- Checked against a real Dependency-Track 5.2.1: a collection (`AGGREGATE_DIRECT_CHILDREN`) with hand-picked versions in a subgroup, read with the read-only API key.
+- Repository cleaned for publication: `docs/mesure-gros-depot.py` and `docs/vuln-feeds.gitlab-ci.yml` removed, the specification now in Markdown (`docs/spec.md`, from the Claude Doc), the lab's Keycloak URL no longer in `frontend/public/config.json` (the chart writes it).
+
 ## 1.5.2 — 2026-11-15
 
 - Large monorepos are read whole: the repository listing comes from one shallow git fetch of the commit's trees (no file contents), with the service token's `read_repository`. gitlab-org/gitlab: 118 195 files in 2 s and 6 MB, where the paginated tree API stopped at 120 s with folders only. The paginated listing, capped at 50 000 entries or 120 s, stays as the fallback when git cannot read the repository. The image now carries git.

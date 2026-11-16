@@ -56,7 +56,7 @@ def good() -> dict[str, Any]:
             "vulture": {"script": ["vulture src"]}, "test": {"script": ["pytest"]}})},
         # Jobs that ran in the last pipelines; None when they cannot be read, "cut" when a pipeline had more jobs than were read.
         "ran": ["semgrep-sast", "secret_detection", "container_scanning", "hadolint", "vulture", "test"], "cut": False,
-        # What Periskope stores about the project: its versions in the Dependency-Track trees and its vulnerability ledger.
+        # What Periskope stores about the project: its bricks in the Dependency-Track aggregates linked to an environment and its vulnerability ledger.
         "tracking": {"dt": True, "followed": True, "bricks": [
             {"tree": "CMS · prod", "env": "prod", "version": "1.2", "running": True, "by_tag": False, "sbom": True},
             {"tree": "CMS · test", "env": "test", "version": "1.2", "running": False, "by_tag": False, "sbom": True}],

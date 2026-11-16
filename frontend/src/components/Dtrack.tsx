@@ -6,10 +6,10 @@ import { Skeleton } from "./status";
 import { Response, SevTag } from "./Vulns";
 
 const day = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("fr-FR") : "");
-const ENV: Record<string, string> = { prod: "Production", test: "Test", dev: "Développement" };
+const ENV: Record<string, string> = { prod: "Production", test: "Test", dev: "Développement", none: "Hors version livrée" };
 export const treeKind = (env: string | null) => (env ? ENV[env] ?? env : "Version livrée");
 
-/** Every tree DT holds: environments, then delivered versions; one to open, two to compare (?version=, ?avec=). */
+/** Every delivered version; one to open, two to compare (?version=, ?avec=). */
 export function Versions() {
   const [params, setParams] = useSearchParams();
   const a = params.get("version"), b = params.get("avec");
@@ -25,9 +25,9 @@ export function Versions() {
   return (
     <>
       <section className="card" aria-labelledby="versions-title">
-        <h2 id="versions-title">Versions suivies dans Dependency-Track</h2>
-        <p className="card-sub">Un arbre par environnement (job GitOps) et un par version livrée en JAR. Les versions qui ne tournent plus restent consultables toute leur durée de service.</p>
-        {list.length === 0 ? <p className="muted">Aucun arbre dans Dependency-Track pour les projets que vous voyez.</p> : (
+        <h2 id="versions-title">Versions livrées</h2>
+        <p className="card-sub">Les projets collection de Dependency-Track, un par version livrée d'un CMS (remplis par le dépôt GitOps) : leurs briques, leur SBOM et leurs CVE.</p>
+        {list.length === 0 ? <p className="muted">Aucune version livrée dans Dependency-Track pour les projets que vous voyez.</p> : (
           <table aria-labelledby="versions-title" className="vuln-table">
             <thead><tr><th scope="col">Version</th><th scope="col">Type</th><th scope="col" className="num">Briques</th><th scope="col" className="num">Sans SBOM</th>
               <th scope="col" className="num">CVE ouvertes</th><th scope="col" className="num">Immédiat</th><th scope="col">Comparer</th></tr></thead>

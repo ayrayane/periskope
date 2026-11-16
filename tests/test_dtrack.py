@@ -1,5 +1,6 @@
 """Dependency-Track, read through a fake server answering as DT 5.2.1's OpenAPI describes it (v1 projects, components, findings,
-analysis trail; v2 mirror runs): trees, merge with GitLab's findings, SSVC, access, versions, CVE sheet, exceptions, ledger, alerts."""
+analysis trail; v2 mirror runs), with delivered versions as collection projects: merge with GitLab's findings, SSVC, access, versions,
+CVE sheet, exceptions, ledger, alerts."""
 import asyncio
 import os
 import sys
@@ -18,10 +19,6 @@ ms = lambda d: int(d.timestamp() * 1000)
 RCE = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
 
 
-def tree(u, name, children=True):
-    return {"uuid": u, "name": name, "version": None, "active": True, "hasChildren": children, "lastBomImport": None, "tags": []}
-
-
 def brick(u, name, version, bom=True, tags=()):
     return {"uuid": u, "name": name, "version": version, "active": True, "lastBomImport": ms(NOW - timedelta(days=1)) if bom else None,
             "tags": [{"name": t} for t in tags]}
@@ -35,12 +32,21 @@ def finding(comp, vuln_id, severity, *, vector=None, kev=False, alias=None, stat
             "analysis": {"state": state, "isSuppressed": suppressed}, "attribution": {"attributedOn": ms(NOW - timedelta(days=days))}}
 
 
-ROOTS = [tree("t-prod", "CMS · prod"), tree("t-test", "CMS · test"), tree("t-510", "CMS · 5.1.0 (livraison JAR)"), tree("build-1", "cms-core", children=False)]
+U = lambda n: f"00000000-0000-0000-0000-{n:012d}"
+PROD, TEST, PORTAIL = U(1), U(2), U(3)
+# DT mirrors GitLab (groups, then one project per path and version); the GitOps repository fills one collection project per delivered
+# version. « team-a/app » 1.0 is delivered nowhere; « mystery » is a brick of no GitLab path; « team-ab/other » is in no delivery.
 CHILDREN = {
-    "t-prod": [brick("b-app-12", "team-a/app", "1.2"), brick("b-lib", "lib", "3.0", bom=False, tags=("deploiement-par-tag",)), brick("b-x", "mystery", "9")],
-    "t-test": [brick("b-app-13", "team-a/app", "1.3")],
-    "t-510": [brick("b-app-11", "team-a/app", "1.1")],
+    PROD: [brick("b-app-12", "team-a/app", "1.2"), brick("b-lib", "team-a/sub/lib", "3.0", bom=False, tags=("deploiement-par-tag",)), brick("b-x", "mystery", "9")],
+    TEST: [brick("b-app-13", "team-a/app", "1.3")],
+    PORTAIL: [brick("b-app-11", "team-a/app", "1.1")],
 }
+COLLECTION = {"collectionLogic": "AGGREGATE_DIRECT_CHILDREN"}
+PROJECTS = [brick(PROD, "CMS", "5.2.0", bom=False) | COLLECTION, brick(TEST, "CMS", "5.3.0-rc", bom=False) | COLLECTION,
+            brick(PORTAIL, "Portail", "1.0", bom=False) | COLLECTION,
+            brick("g-team-a", "team-a", None, bom=False), brick("b-app-10", "team-a/app", "1.0"), brick("b-other", "team-ab/other", "2.0"),
+            *(b for bs in CHILDREN.values() for b in bs)]
+
 FINDINGS = {
     "b-app-12": [finding("log4j-core", "CVE-2021-44228", "CRITICAL", vector=RCE, kev=True, days=400),
                  finding("jackson", "GHSA-aaaa-bbbb-cccc", "MEDIUM", alias="CVE-2099-0001"),
@@ -49,7 +55,7 @@ FINDINGS = {
     "b-app-13": [finding("commons-text", "CVE-2099-0004", "LOW")],
     "b-app-11": [finding("log4j-core", "CVE-2021-44228", "CRITICAL", vector=RCE, kev=True, days=400), finding("xstream", "CVE-2099-0005", "MEDIUM")],
     "b-x": [finding("secret-lib", "CVE-2099-0009", "CRITICAL")],
-    "b-lib": [],
+    "b-other": [finding("guava", "CVE-2099-0008", "MEDIUM")],
 }
 TRAILS = {"v-CVE-2099-0002": {"analysisState": "NOT_AFFECTED", "analysisJustification": "CODE_NOT_REACHABLE", "analysisResponse": "NOT_SET",
                               "analysisDetails": "classe jamais chargée", "isSuppressed": True, "analysisComments": [{"timestamp": ms(NOW - timedelta(days=3))}]},
@@ -65,8 +71,7 @@ def fake_dt(findings=FINDINGS):
         path, q = req.url.path, req.url.params
         page = lambda items: httpx.Response(200, json=items if q.get("pageNumber") == "1" else [])
         if path == "/api/v1/project":
-            assert q["onlyRoot"] == "true"
-            return page(ROOTS)
+            return page(PROJECTS)
         if path.startswith("/api/v1/project/") and path.endswith("/children"):
             return page(CHILDREN[path.split("/")[4]])
         if path.startswith("/api/v1/component/project/"):
@@ -108,7 +113,7 @@ def dt_env(client, database_url, monkeypatch):  # noqa: F811
     async def states():
         pool = await connect(database_url)
         await pool.execute("INSERT INTO project_state (project_id) SELECT id FROM projects ON CONFLICT DO NOTHING")
-        await pool.execute("TRUNCATE dt_projects, dt_sources, vuln_ledger, alerts_sent, vuln_feeds CASCADE")
+        await pool.execute("TRUNCATE dt_projects, dt_state, dt_sources, dt_collections, vuln_ledger, alerts_sent, vuln_feeds CASCADE")
         await pool.close()
     asyncio.run(states())
     return client
@@ -116,54 +121,58 @@ def dt_env(client, database_url, monkeypatch):  # noqa: F811
 
 def test_trees_merge_and_access(dt_env, database_url):
     api = dt_env
-    assert asyncio.run(setup(database_url)) == {"trees": 3, "bricks": 5}   # the « build » project, without children, is left out
+    # Collections and the group are not bricks; only the versions that run are read: the delivered bricks with an SBOM, and other's latest.
+    assert asyncio.run(setup(database_url)) == {"collections": 3, "projects": 7, "read": 5}
     api.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}))
 
     # One list: GitLab's SAST finding plus DT's open findings of the running bricks; GitLab's log4j copy is gone, not counted twice.
     items = {v["key"]: v for v in api.get("/api/v1/vulnerabilities?instance=gl").json()["items"]}
     assert set(items) == {"CVE-2021-44228", "CVE-2099-0001", "CVE-2099-0004", "CVE-2099-0005", "Injection SQL"}
     assert items["CVE-2021-44228"]["projects"] == 1 and items["CVE-2021-44228"]["kev"] is True   # KEV from DT, no Periskope feed
-    # SSVC: exploited and in prod → Immédiat; low, only in test → Différé; a GHSA is keyed by its CVE alias.
-    assert items["CVE-2021-44228"]["response"] == "immediate" and items["CVE-2099-0004"]["response"] == "deferred"
-    assert items["CVE-2099-0005"]["response"] == "scheduled"   # a delivered JAR version counts as prod; medium, not automatable
+    # SSVC: exploited and delivered (prod) → Immédiat; low, delivered → Planifié; a GHSA is keyed by its CVE alias.
+    assert items["CVE-2021-44228"]["response"] == "immediate" and items["CVE-2099-0004"]["response"] == "scheduled"
+    assert items["CVE-2099-0005"]["response"] == "scheduled"   # 1.1 is delivered in Portail; medium, not automatable
     assert next(iter(items)) == "CVE-2021-44228" and items["CVE-2021-44228"]["overdue"] == 1
     where = api.get("/api/v1/vulnerabilities/projects?key=CVE-2021-44228").json()[0]
-    assert where["type"] == "dependency_track" and sorted(where["trees"]) == ["CMS · 5.1.0 (livraison JAR)", "CMS · prod"]
+    assert where["type"] == "dependency_track" and sorted(where["trees"]) == ["CMS 5.2.0", "Portail 1.0"]
     summary = api.get("/api/v1/projects/summary?instance=gl").json()
     assert summary["vulns"]["by_response"]["immediate"] == 1 and set(summary["vulns"]["sla_hours"]) == {"immediate", "out_of_cycle", "scheduled"}
     assert {s["name"] for s in summary["sources"]} >= {"NVD", "GITHUB"}
     project = api.get("/api/v1/projects/gl/team-a/app").json()
-    assert {(b["tree"], b["version"]) for b in project["dt"]} == {("CMS · prod", "1.2"), ("CMS · test", "1.3"), ("CMS · 5.1.0 (livraison JAR)", "1.1")}
+    assert {(b["tree"], b["version"]) for b in project["dt"]} == {("CMS 5.2.0", "1.2"), ("CMS 5.3.0-rc", "1.3"), ("Portail 1.0", "1.1")}
 
-    # DT's work: lib (team-a/sub/lib by its last segment) runs without SBOM and by tag; app has one component without purl.
+    # DT's work: lib runs without SBOM and by tag; app has one component without purl.
     work = api.get("/api/v1/dt/work").json()
-    assert [(w["path"], w["name"]) for w in work["no_sbom"]] == [("team-a/sub/lib", "lib")] and len(work["by_tag"]) == 1
+    assert [(w["path"], w["name"]) for w in work["no_sbom"]] == [("team-a/sub/lib", "team-a/sub/lib")] and len(work["by_tag"]) == 1
     assert [(w["name"], w["no_purl"]) for w in work["no_purl"]] == [("team-a/app", 1)]
     assert work["expired_exceptions"] == 1 and sorted(s["name"] for s in work["stale_sources"]) == ["NVD", "OSV"]
 
     # Versions, a comparison, a CVE's sheet: alice never sees « mystery », a brick no project of hers matches.
     trees = api.get("/api/v1/dt/versions").json()
-    assert [t["name"] for t in trees] == ["CMS · prod", "CMS · test", "CMS · 5.1.0 (livraison JAR)"] and trees[0]["bricks"] == 2
-    prod = api.get("/api/v1/dt/versions/t-prod").json()
-    assert {b["name"] for b in prod["bricks"]} == {"team-a/app", "lib"} and "CVE-2099-0009" not in {f["key"] for f in prod["findings"]}
-    diff = api.get("/api/v1/dt/compare?a=t-510&b=t-prod").json()
+    assert [t["name"] for t in trees] == ["Portail 1.0", "CMS 5.3.0-rc", "CMS 5.2.0"] and trees[2]["bricks"] == 2 and trees[2]["env"] is None
+    prod = api.get(f"/api/v1/dt/versions/{PROD}").json()
+    assert {b["name"] for b in prod["bricks"]} == {"team-a/app", "team-a/sub/lib"} and "CVE-2099-0009" not in {f["key"] for f in prod["findings"]}
+    diff = api.get(f"/api/v1/dt/compare?a={PORTAIL}&b={PROD}").json()
     assert [f["key"] for f in diff["only_a"]] == ["CVE-2099-0005"] and [f["key"] for f in diff["both"]] == ["CVE-2021-44228"]
-    assert {(b["name"], b["a"], b["b"]) for b in diff["bricks"]} == {("team-a/app", "1.1", "1.2"), ("lib", None, "3.0")}
+    assert {(b["name"], b["a"], b["b"]) for b in diff["bricks"]} == {("team-a/app", "1.1", "1.2"), ("team-a/sub/lib", None, "3.0")}
     sheet = api.get("/api/v1/dt/cve/CVE-2021-44228").json()
-    assert {(p["tree"], p["version"], p["response"]) for p in sheet["places"]} == {("CMS · prod", "1.2", "immediate"), ("CMS · 5.1.0 (livraison JAR)", "1.1", "immediate")}
-    assert [(f["tree"], f["version"]) for f in sheet["fixed_in"]] == [("CMS · test", "1.3")]   # already updated there
+    assert {(p["tree"], p["version"], p["response"]) for p in sheet["places"]} == {("CMS 5.2.0", "1.2", "immediate"), ("Portail 1.0", "1.1", "immediate")}
+    assert [(f["tree"], f["version"]) for f in sheet["fixed_in"]] == [("CMS 5.3.0-rc", "1.3")]   # already updated there
     assert [(row["path"], row["closed_at"]) for row in sheet["ledger"]] == [("team-a/app", None)]
     exc = api.get("/api/v1/dt/exceptions").json()
     assert [(e["key"], e["expired"], e["expires_on"]) for e in exc["exceptions"]] == [("CVE-2099-0003", True, "2026-01-01")]
     assert [(e["key"], e["justification"]) for e in exc["not_concerned"]] == [("CVE-2099-0002", "CODE_NOT_REACHABLE")]
 
-    # Another team: nothing of team-a, not even that a version holds a CVE.
+    # Another team: nothing of team-a, not even that a version holds a CVE; its own project, in no aggregate, counts its latest SBOM.
     api.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "bob", namespaces=frozenset({("gl", "team-ab")}))
     assert api.get("/api/v1/dt/versions").json() == [] and api.get("/api/v1/dt/cve/CVE-2021-44228").status_code == 404
-    assert api.get("/api/v1/dt/versions/t-prod").json()["bricks"] == [] and api.get("/api/v1/dt/exceptions").json()["exceptions"] == []
+    assert api.get(f"/api/v1/dt/versions/{PROD}").json()["bricks"] == [] and api.get("/api/v1/dt/exceptions").json()["exceptions"] == []
     assert api.get("/api/v1/dt/work").json()["no_sbom"] == []
+    other = api.get("/api/v1/vulnerabilities/projects?key=CVE-2099-0008").json()
+    assert [(w["path"], w["trees"], w["envs"]) for w in other] == [("team-ab/other", ["Dependency-Track (hors version livrée)"], [])]
+    assert [p["tree"] for p in api.get("/api/v1/dt/cve/CVE-2099-0008").json()["places"]] == ["Dependency-Track (hors version livrée)"]
     api.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
-    assert {b["name"] for b in api.get("/api/v1/dt/versions/t-prod").json()["bricks"]} == {"team-a/app", "lib", "mystery"}
+    assert {b["name"] for b in api.get(f"/api/v1/dt/versions/{PROD}").json()["bricks"]} == {"team-a/app", "team-a/sub/lib", "mystery"}
 
 
 def test_ledger_indicators_and_alerts(dt_env, database_url, monkeypatch, tmp_path):
@@ -192,9 +201,9 @@ def test_ledger_indicators_and_alerts(dt_env, database_url, monkeypatch, tmp_pat
     this = ind["months"][-1]
     # Detected 400 days ago, fixed today: a critical fixed late, open 400 days.
     assert (this["critical_fixed"], this["critical_on_time"]) == (1, 0) and this["days"]["critical"] == pytest.approx(400, abs=1)
-    assert ind["sbom"] == {"bricks": 4, "with_sbom": 3}   # prod tree (3) and the JAR delivery (1); lib has none and ind["exceptions"] == {"active": 0, "expired": 1}
+    assert ind["sbom"] == {"bricks": 5, "with_sbom": 4} and ind["exceptions"] == {"active": 0, "expired": 1}   # every delivered brick; lib has none
 
-    # Alerts: each new critical (here the SAST-free DT critical of « mystery » has no project) once, the stale NVD mirror once a day.
+    # Alerts: each new critical (here the DT critical of « mystery » has no project) once, the stale NVD mirror once a day.
     (tmp_path / "periskope-alerts").mkdir()
     (tmp_path / "periskope-alerts" / "url").write_text("https://chat.test/hooks/x")
     monkeypatch.setenv("PERISKOPE_SECRETS_DIR", str(tmp_path))
@@ -218,7 +227,7 @@ def test_ledger_indicators_and_alerts(dt_env, database_url, monkeypatch, tmp_pat
 
 
 def test_checks_read_the_stored_trees_and_ledger(dt_env, database_url, tmp_path):
-    """The checks without a source of their own judge what the collector loads for them: the project's versions in the trees and its ledger."""
+    """The checks without a source of their own judge what the collector loads for them: the project's bricks in the delivered versions and its ledger."""
     from fake_gitlab import context, good
     from periskope_checks import REGISTRY, run_all
     from periskope_collector.analysis import tracking
@@ -233,9 +242,9 @@ def test_checks_read_the_stored_trees_and_ledger(dt_env, database_url, tmp_path)
         ids = [i for i in REGISTRY if i.startswith(("dt.", "ledger."))]
         return [{i: o.status for i, o in (await run_all(context(good() | {"tracking": t}, tmp_path), ids)).items()} for t in loaded]
     here, elsewhere = asyncio.run(scenario())
-    # 1.2 runs in prod and 1.1 in a delivery, both with their SBOM; test only ever saw 1.3; log4j is long past its deadline.
+    # 1.1, 1.2 and 1.3 are delivered with their SBOM, by digest (DT cannot say whether they went through test); log4j is long past its deadline.
     assert here == {"dt.sca": CheckStatus.PASS, "dt.prod_component": CheckStatus.PASS, "dt.prod_artifact": CheckStatus.PASS,
-                    "dt.prod_dependencies": CheckStatus.PASS, "dt.same_artifact": CheckStatus.FAIL,
+                    "dt.prod_dependencies": CheckStatus.PASS, "dt.same_artifact": CheckStatus.UNKNOWN,
                     "ledger.sla": CheckStatus.FAIL, "ledger.fix_rate": CheckStatus.PASS}
     # Dependency-Track follows no project of that instance: not measured, never a failure.
     assert {elsewhere[i] for i in ("dt.prod_component", "dt.prod_artifact", "dt.prod_dependencies", "dt.same_artifact")} == {CheckStatus.UNKNOWN}
