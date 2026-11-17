@@ -96,14 +96,17 @@ def router(state: dict[str, Any], current, audit) -> APIRouter:
         return {"items": items, "next_cursor": items[-1]["id"] if len(rows) > limit else None}
 
     @r.get("/audit")
-    async def audit_log(me: Admin, actor: str | None = None, action: str | None = None,
-                        before: datetime | None = None, limit: int = Query(50, ge=1, le=200)) -> dict:
+    async def audit_log(me: Admin, actor: str | None = None, action: str | None = None, before: datetime | None = None,
+                        before_target: str | None = Query(None, max_length=2000), limit: int = Query(50, ge=1, le=200)) -> dict:
+        # Keyset on (at, target): one bulk scope decision writes hundreds of rows at the same instant, none may fall between two pages.
         rows = await state["db"].fetch(
             "SELECT at, actor, action, target, before, after FROM audit_log WHERE ($1::text IS NULL OR actor = $1)"
-            " AND ($2::text IS NULL OR action LIKE $2 || '%') AND ($3::timestamptz IS NULL OR at < $3) ORDER BY at DESC LIMIT $4",
-            actor, action, before, limit + 1)
+            " AND ($2::text IS NULL OR action LIKE $2 || '%') AND ($3::timestamptz IS NULL OR at < $3 OR (at = $3 AND target < $5))"
+            " ORDER BY at DESC, target DESC LIMIT $4",
+            actor, action, before, limit + 1, before_target)
         items = [dict(x) for x in rows[:limit]]
-        return {"items": items, "next_before": items[-1]["at"] if len(rows) > limit else None}
+        last = items[-1] if len(rows) > limit else None
+        return {"items": items, "next_before": last and last["at"], "next_target": last and last["target"]}
 
     return r
 

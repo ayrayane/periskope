@@ -226,7 +226,8 @@ class Context:
         if tree is None:
             return None
         rx = re.compile(pattern, re.IGNORECASE)
-        named = [p for p in await self.blobs() or {} if p not in tree.paths]
+        listed = set(tree.paths)  # a monorepo lists 100 000 paths: no list scan per file
+        named = [p for p in await self.blobs() or {} if p not in listed]
         return [p for p in [*tree.paths, *named] if rx.search(p) and not NOT_PRODUCT.search(p)]
 
     async def partial(self, absent: str) -> Outcome | None:

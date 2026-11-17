@@ -256,7 +256,7 @@ function demoFix(instance: string, path: string, check: string | undefined, prev
     : { done: "Démo : le réglage aurait été appliqué avec votre compte GitLab. Rien n'a été modifié." };
 }
 
-// Dependency-Track in the demo: the projects of the first group with findings are bricks of delivered versions (collection projects).
+// Dependency-Track in the demo: the projects of the first group with findings are bricks of delivered versions (projects tagged « version-livree »).
 const DT_TYPES = new Set(["dependency_scanning", "container_scanning"]);
 const BRICKS = PROJECTS.filter((x) => x.findings?.some((f) => DT_TYPES.has(f.type)) && x.instance === PROJECTS[0].instance).slice(0, 9);
 const TREES = [
@@ -364,7 +364,7 @@ function route(path: string, method: string): unknown {
   const fix = /^\/projects\/([^/]+)\/(.+?)\/fixes(?:\/([^/]+?)(\/preview)?)?$/.exec(p);
   if (fix) return demoFix(fix[1], fix[2], fix[3], !!fix[4]);
   if (method !== "GET") throw new DemoError(403, "Démo en lecture seule : aucune analyse ni modification n'est possible ici.");
-  if (p === "/me") return { sub: "demo", username: "demo", admin: false, reads_all: true, namespaces: [], maintains: [] };
+  if (p === "/me") return { sub: "demo", username: "demo", admin: false, reads_all: true, namespaces: [], maintains: [], pending: [] };
   if (p === "/instances") return INSTANCES.map(({ sonar, ...i }) => i);
   if (p === "/checks") return CHECKS.map((c) => ({ ...c, scope: null }));
   if (p === "/activities") return { version: "5.0.2", items: ACTIVITIES };
@@ -435,7 +435,7 @@ function route(path: string, method: string): unknown {
       groups.set(f.key, g);
     }
     const rank = (s: string) => SEV.indexOf(s as (typeof SEV)[number]);
-    return { measured: measured.length, sla_hours: SLA, items: [...groups.values()].sort((a, b) => RESP.indexOf(a.response) - RESP.indexOf(b.response) || rank(priorityOf(a)) - rank(priorityOf(b)) || rank(a.severity) - rank(b.severity) || b.projects - a.projects || a.key.localeCompare(b.key)) };
+    return { measured: measured.length, sla_hours: SLA, items: [...groups.values()].filter((g) => !q.get("severity") || g.severity === q.get("severity")).sort((a, b) => RESP.indexOf(a.response) - RESP.indexOf(b.response) || rank(priorityOf(a)) - rank(priorityOf(b)) || rank(a.severity) - rank(b.severity) || b.projects - a.projects || a.key.localeCompare(b.key)) };
   }
   if (p === "/vulnerabilities/projects") {
     return inScope(q).flatMap((x) => (x.findings ?? []).filter((f) => f.key === q.get("key")).map((f) => ({ instance: x.instance, path: x.path, score: x.score, coverage: x.coverage, severity: f.severity, type: DT_TYPES.has(f.type) && dtTrees(x) ? "dependency_track" : f.type, detected_at: f.detected_at, overdue: late(f, x.topics), priority: priorityOf(f),
@@ -457,7 +457,8 @@ function route(path: string, method: string): unknown {
     const sc = inScope(q).filter((x) => x.score != null), now = avg(sc.map((x) => x.score!)) ?? 0;
     return {
       months: Array.from({ length: 11 }, (_, k) => ({ month: `2026-${String(k + 1).padStart(2, "0")}-01`, score: Math.max(3, now - (10 - k) * 2.1 + Math.sin(k * 1.7) * 2.5), projects: sc.length })),
-      declining: sc.filter((x) => x.id % 11 === 3).slice(0, 4).map((x) => ({ instance: x.instance, path: x.path, score: x.score, before: Math.min(100, x.score! + 7 + (x.id % 9)), since: iso(NOW - 30 * DAY) })),
+      declining: sc.filter((x) => before(x) != null && x.score! < before(x)! - Number(q.get("drop") ?? 5)).sort((a, b) => a.score! - before(a)! - (b.score! - before(b)!)).slice(0, 10)
+        .map((x) => ({ instance: x.instance, path: x.path, score: x.score, before: before(x), since: iso(NOW - 30 * DAY) })),
     };
   }
   if (p === "/groups/heatmap") {
@@ -496,7 +497,9 @@ function route(path: string, method: string): unknown {
       if (!last) return [];
       return [["main", 0], ["develop", 6], ["feat/securite", 14], ["release/2.3", -9]].map(([branch, delta], i) => {
         const score = Math.max(0, Math.min(100, (last.score ?? 0) + (delta as number)));
-        return { branch, last_id: last.id + i, last_status: "succeeded", last_at: iso(NOW - i * DAY), run_id: last.id, score, coverage: last.coverage, finished_at: iso(NOW - i * DAY), commit_sha: last.commit_sha };
+        // The reference branch is the project's last analysis itself: same run, same date as the header and the history.
+        const at = i === 0 ? last.finished_at : iso(NOW - i * DAY);
+        return { branch, last_id: i === 0 ? last.id : last.id + i, last_status: "succeeded", last_at: at, run_id: last.id, score, coverage: last.coverage, finished_at: at, commit_sha: last.commit_sha };
       });
     }
     if (projMatch[3] === "/runs") return { items: [...proj.history].reverse(), next_cursor: null };

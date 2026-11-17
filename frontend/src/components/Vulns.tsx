@@ -70,7 +70,7 @@ export function Age({ since, overdue, deadline }: { since: string | null; overdu
   if (!since) return <span className="muted small">date inconnue</span>;
   const age = span((Date.now() - Date.parse(since)) / 3_600_000);
   return overdue
-    ? <span className="badge tone-fail age-late" title={deadline ? `Délai de correction : ${span(deadline)}` : undefined}>{age} · hors délai</span>
+    ? <span className="age-late" title={deadline ? `Délai de correction : ${span(deadline)}` : undefined}>{age} <span className="badge tone-fail">hors délai</span></span>
     : <span className="muted small" title={deadline ? `Délai de correction : ${span(deadline)}` : undefined}>{age}</span>;
 }
 

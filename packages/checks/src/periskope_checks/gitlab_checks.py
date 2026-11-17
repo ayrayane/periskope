@@ -68,7 +68,7 @@ async def open_vulns(ctx: Context, cwes: set[str], reports: set[str]) -> Outcome
         return Outcome.unknown("rapport de vulnérabilités illisible")
     if not types & reports:
         return Outcome.unknown(f"aucun scanner {'/'.join(sorted(reports))} n'a produit de rapport récent")
-    hits = [v["title"] for v in vulns if {f"CWE-{i['externalId']}" for i in v.get("identifiers") or [] if i["externalType"].lower() == "cwe"} & cwes]
+    hits = [v["title"] for v in vulns if {f"CWE-{i['externalId']}" for i in v.get("identifiers") or [] if (i.get("externalType") or "").lower() == "cwe"} & cwes]
     if hits:
         return Outcome.fail(f"{len(hits)} vulnérabilité(s) ouverte(s)", titles=hits[:10])
     return Outcome.ok("aucune vulnérabilité ouverte de ce type", scanners=sorted(types & reports))

@@ -9,7 +9,7 @@ import json
 import re
 import time
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from arq import create_pool
@@ -87,8 +87,8 @@ async def current(authorization: Annotated[str | None, Header()] = None) -> View
     if hit and hit[0] > time.monotonic():
         return hit[1]
     v = await viewer(state["db"], state["arq"], state["verifier"], claims)
-    # An empty scope may only mean memberships were still resolving (slow collector): recompute it rather than hold it a minute.
-    if not (v.admin or v.namespaces or v.projects):
+    # Memberships still being read: the scope is incomplete, built again on the next call rather than held a minute.
+    if v.pending:
         return v
     if len(cache) > 10_000:
         cache.clear()
@@ -128,7 +128,9 @@ async def health() -> dict:
 async def me_(me: Me) -> dict:
     return {"sub": me.sub, "username": me.username, "admin": me.admin, "reads_all": me.reads_all,
             "namespaces": sorted(f"{i}:{n}" for i, n in me.namespaces),
-            "maintains": sorted(f"{i}:{n}" for i, n in me.maintains)}
+            "maintains": sorted(f"{i}:{n}" for i, n in me.maintains),
+            # Instances whose GitLab rights are still being read: the interface waits and asks again.
+            "pending": sorted(me.pending)}
 
 
 @api.get("/instances")
@@ -230,6 +232,9 @@ async def list_projects(
     if cursor:
         try:
             last_key, last_id = json.loads(base64.urlsafe_b64decode(cursor))
+            # The cursor carries a date as text; the query compares dates.
+            if sort == "last_run" and last_key is not None:
+                last_key = datetime.fromisoformat(last_key)
         except (ValueError, TypeError):
             raise HTTPException(400, "curseur invalide") from None
         if sort == "name":
@@ -377,7 +382,8 @@ RANK = rank("f->>'severity'")
 
 
 @api.get("/vulnerabilities")
-async def list_vulnerabilities(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None, q: str | None = Query(None, max_length=100)) -> dict:
+async def list_vulnerabilities(me: Me, instance: str | None = None, namespace: str | None = None, environment: Env = None, q: str | None = Query(None, max_length=100),
+                               severity: Literal["critical", "high", "medium", "low", "info", "unknown"] | None = None) -> dict:
     """Open vulnerabilities of the scope grouped by CVE (by title without one): worst severity and how many projects each touches."""
     where, params = scoped(me, instance, namespace, environment)
     measured = await state["db"].fetchval(
@@ -385,14 +391,19 @@ async def list_vulnerabilities(me: Me, instance: str | None = None, namespace: s
     if q:
         params.append(q)
         where += f" AND (strpos(lower(f->>'key'), lower(${len(params)})) > 0 OR strpos(lower(f->>'title'), lower(${len(params)})) > 0)"
-    # shortcut: the 1 000 most severe and widespread; a search narrows the rest.
+    # Filtered here, not in the page: past the 1 000 first, a severity the page filtered itself would come back incomplete.
+    having = ""
+    if severity:
+        params.append(SEVERITIES.index(severity) + 1)
+        having = f" HAVING min({RANK}) = ${len(params)}"
+    # shortcut: the 1 000 most severe and widespread; a search or a severity narrows the rest.
     r = await rules(state["db"])
     rows = await state["db"].fetch(
         f"SELECT f->>'key' AS key, bool_or((f->>'cve')::boolean) AS cve, min(f->>'title') AS title, min({RANK}) AS rank, count(*) AS projects,"
         f" min({rank(r.priority)}) AS prank, min({respond_rank(r.response)}) AS rrank, bool_or({KEV}) AS kev, max({EPSS}) AS epss, max(e.percentile) AS percentile,"
         f" min((f->>'detected_at')::timestamptz) AS detected_at, count(*) FILTER (WHERE {overdue(r.deadline)}) AS overdue"
         f" FROM projects p JOIN project_status s ON s.project_id = p.id, {FINDINGS} WHERE {where}"
-        " GROUP BY 1 ORDER BY rrank, prank, overdue DESC, rank, projects DESC, key LIMIT 1000", *params)
+        f" GROUP BY 1{having} ORDER BY rrank, prank, overdue DESC, rank, projects DESC, key LIMIT 1000", *params)
     return {"measured": measured, "sla_hours": r.hours,
             "items": [{**{k: x[k] for k in ("key", "cve", "title", "projects", "detected_at", "overdue", "kev", "epss", "percentile")},
                        "severity": SEVERITIES[x["rank"] - 1], "priority": SEVERITIES[x["prank"] - 1], "response": RESPONSES[x["rrank"] - 1]} for x in rows]}

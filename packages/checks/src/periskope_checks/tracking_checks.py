@@ -34,7 +34,7 @@ def label(b: dict[str, Any]) -> str:
 
 
 async def production(ctx: Context) -> tuple[list[dict[str, Any]], Outcome | None]:
-    """The project's versions running in production: its bricks in a delivered version (a collection project, no environment).
+    """The project's versions running in production: its bricks in a delivered version (no environment).
     Without any, the GitLab topic says whether one was expected."""
     if (skip := unlinked(ctx)) is not None:
         return [], skip
@@ -46,7 +46,7 @@ async def production(ctx: Context) -> tuple[list[dict[str, Any]], Outcome | None
         return [], Outcome.fail("déclaré en production (topic prod) mais dans aucune version livrée de Dependency-Track")
     if topics:
         return [], Outcome.not_applicable("projet hors production", topics=sorted(topics))
-    return [], Outcome.unknown("dans aucune version livrée de Dependency-Track (projet collection), et ni topic prod, test ou dev sur le projet")
+    return [], Outcome.unknown("dans aucune version livrée de Dependency-Track (projet étiqueté version-livree), et ni topic prod, test ou dev sur le projet")
 
 
 @check("dt.sca", Depends.LIVE, "Envoyer le SBOM de chaque version à Dependency-Track, ou activer Dependency Scanning dans la CI.")
@@ -87,7 +87,7 @@ async def fix_rate(ctx: Context) -> Outcome:
                       fixed=fixed, open=still)
 
 
-@check("dt.prod_component", Depends.LIVE, "Mettre la version livrée du projet dans le projet collection de son CMS, dans Dependency-Track (dépôt GitOps).")
+@check("dt.prod_component", Depends.LIVE, "Faire entrer la version du projet dans une version livrée de son CMS (dépôt GitOps), qui la publie dans Dependency-Track.")
 async def prod_component(ctx: Context) -> Outcome:
     bricks, skip = await production(ctx)
     return skip or Outcome.ok("composant suivi en production", versions=sorted(map(label, bricks)))

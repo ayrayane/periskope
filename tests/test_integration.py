@@ -192,6 +192,66 @@ def test_api_scope_and_launch_rules(client):
     assert project["active_run"] == first.json()["id"] and project["can_launch"]
 
 
+def test_every_sort_pages_to_the_end(client, db):
+    """Keyset paging, one project a page: ties on the sort key and projects without one (never analysed) are each served once."""
+    import asyncio
+
+    async def seed():
+        pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
+        await pool.execute(
+            "INSERT INTO project_state (project_id, score, last_success_at) SELECT id, CASE WHEN gitlab_id < 9 THEN 40 END,"
+            " CASE WHEN gitlab_id < 9 THEN '2026-11-01 10:00:00.123456+00'::timestamptz END FROM projects")
+        await pool.close()
+    asyncio.run(seed())
+    client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
+    for sort in ("name", "score", "last_run"):
+        seen, cursor = [], ""
+        while cursor is not None:
+            page = client.get(f"/api/v1/projects?sort={sort}&limit=1&cursor={cursor}").json()
+            seen += [p["path"] for p in page["items"]]
+            cursor = page["next_cursor"]
+        assert seen == [path for _, path, _ in PROJECTS], sort
+
+
+def test_rights_still_being_read_are_said_then_served(client, monkeypatch):
+    """A first sign-in: until the collector has written the memberships, the API says which instances are still read."""
+    import json
+
+    import redis
+    from periskope_api import app as api
+    from periskope_api import auth
+
+    sub = f"s-{uuid.uuid4().hex}"
+
+    class Keycloak:
+        async def claims(self, authorization):
+            return {"sub": sub, "preferred_username": "alice", "iat": 1, "exp": 2}
+
+        def role(self, claims):
+            return "viewer"
+
+    api.app.dependency_overrides.clear()
+    monkeypatch.setitem(api.state, "verifier", Keycloak())
+    monkeypatch.setattr(auth, "MEMBERSHIP_WAIT_S", 0.2)
+    valkey = redis.Redis.from_url(os.environ["PERISKOPE_VALKEY_URL"])
+    try:
+        me = client.get("/api/v1/me").json()
+        assert me["pending"] == ["gl"] and me["namespaces"] == []
+        # Nothing is shown meanwhile, and that incomplete scope is not kept for the next call.
+        assert client.get("/api/v1/projects").json()["items"] == []
+        assert not [k for k in api.state.get("viewers", {}) if k[0] == sub]
+        # The collector's answer, as resolve_memberships writes it.
+        valkey.set(f"members:{sub}:gl", json.dumps({"groups": ["team-a"], "projects": []}), ex=900)
+        me = client.get("/api/v1/me").json()
+        assert me["pending"] == [] and me["namespaces"] == ["gl:team-a"]
+        assert [p["path"] for p in client.get("/api/v1/projects").json()["items"]] == ["team-a/app", "team-a/sub/lib"]
+        assert [k for k in api.state["viewers"] if k[0] == sub]
+    finally:
+        # No collector runs here: the job asked for stays in the queue.
+        valkey.delete(f"members:{sub}:gl", f"arq:job:members:{sub}:gl")
+        valkey.zrem("collect:gl", f"members:{sub}:gl")
+
+
 async def test_sync_projects_applies_exclusions(db, tmp_path):
     import httpx
     from periskope_clients.gitlab import GitLab
@@ -226,6 +286,15 @@ async def test_sync_projects_applies_exclusions(db, tmp_path):
     gl.pages = cut
     assert (await sync_projects(db, gl, instance))["truncated"]
     assert await db.fetchval("SELECT enabled FROM projects WHERE path = 'team-a/sub/lib'")
+
+    # A project deleted then created again at the same path, and two projects that swapped paths: the sync goes through.
+    async def recreated(*a, **kw):
+        return [p(21, "team-a/app"), p(8, "team-a/old"), p(11, "team-a/sub/lib")], False
+    gl.pages = recreated
+    await sync_projects(db, gl, instance)
+    rows = {r["gitlab_id"]: (r["path"], r["enabled"]) for r in await db.fetch("SELECT gitlab_id, path, enabled FROM projects WHERE gitlab_id IN (7, 8, 11, 21)")}
+    assert rows[21] == ("team-a/app", True) and rows[8] == ("team-a/old", True) and rows[11] == ("team-a/sub/lib", True)
+    assert rows[7][1] is False and rows[7][0] != "team-a/app"
 
 
 def test_scope_api(client, db, tmp_path):
@@ -298,6 +367,7 @@ async def test_dormant_projects_are_spaced_when_the_instance_asks(db):
 
 
 def test_admin_routes(client):
+    import asyncio
     client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "alice", namespaces=frozenset({("gl", "team-a")}))
     assert client.get("/api/v1/admin/overview").status_code == 404  # not even told the area exists
     client.who["v"] = Viewer(f"s-{uuid.uuid4().hex}", "root", admin=True)
@@ -308,6 +378,22 @@ def test_admin_routes(client):
     assert client.get("/api/v1/admin/settings").json()["changed"]["catch_up_at"]["updated_by"] == "root"
     assert client.get("/api/v1/admin/audit?action=settings").json()["items"][0]["after"] == {"catch_up_at": "02:15", "on_demand_per_hour": 5}
     client.put("/api/v1/admin/settings", json={"catch_up_at": "01:00", "on_demand_per_hour": 10})
+
+    # A bulk decision writes many rows at the same instant: paging one row at a time still serves each of them once.
+    async def bulk():
+        pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
+        await pool.executemany("INSERT INTO audit_log (at, actor, action, target) VALUES ('2026-11-02 10:00:00+00', 'root', 'page.test', $1)",
+                               [(f"organisation/check:c{i}",) for i in range(3)])
+        await pool.close()
+    asyncio.run(bulk())
+    seen, cursor = [], {}
+    while True:
+        page = client.get("/api/v1/admin/audit", params={"action": "page.test", "limit": 1, **cursor}).json()
+        seen += [x["target"] for x in page["items"]]
+        if not page["next_before"]:
+            break
+        cursor = {"before": page["next_before"], "before_target": page["next_target"]}
+    assert sorted(seen) == [f"organisation/check:c{i}" for i in range(3)]
 
 
 def test_score_drop_alert_is_posted_once(database_url, tmp_path, monkeypatch):
@@ -420,11 +506,12 @@ def test_other_team_reaches_nothing(client, db, tmp_path):
     async def analysed(gitlab_id):
         pool = await connect(os.environ["PERISKOPE_DATABASE_URL"])
         project_id = await pool.fetchval("SELECT id FROM projects WHERE gitlab_id = $1", gitlab_id)
-        # A brick, with its SBOM, of a delivered version (a DT collection project): the inventory of level 1 is measured.
-        link = f"coll-{gitlab_id}"
+        # A brick, with its SBOM, of a delivered version (a DT project tagged version-livree): the inventory of level 1 is measured.
+        link = f"livree-{gitlab_id}"
         await pool.execute("INSERT INTO dt_collections (uuid, name, version, active) VALUES ($1, 'CMS', '5.2.0', true)", link)
-        await pool.execute("INSERT INTO dt_projects (uuid, name, version, parent, bom_at, project_id) VALUES ($1, 'app', '1.2', $2, now(), $3)",
-                           f"dt-{gitlab_id}", link, project_id)
+        await pool.execute("INSERT INTO dt_projects (uuid, name, version, bom_at, project_id) VALUES ($1, 'app', '1.2', now(), $2)",
+                           f"dt-{gitlab_id}", project_id)
+        await pool.execute("INSERT INTO dt_members (tree, project) VALUES ($1, $2)", link, f"dt-{gitlab_id}")
         run = await runs.create(pool, project_id, "main", "user", "x")
         ctx = context(good(), tmp_path)
         await analyse(pool, ctx.gl, run, enterprise=True, sonar=ctx.sonar)

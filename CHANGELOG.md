@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.0 — 2026-11-17
+
+- Dependency-Track: a delivered version is now a DT project tagged `version-livree`, built by the GitOps template from the chosen brick versions (each brick a component named and versioned as its own DT project), so it reads as a whole in DT and a brick version can be in several delivered versions, of one CMS or several. Collection projects could not: a DT project has one parent. Periskope finds the bricks among the components, reads their findings and analyses once on their own project, and keeps which delivered versions hold which brick (migration 0012, `dt_members`). The GitOps template has to change accordingly (README). A brick's VEX must list the components it concerns: DT 5.2.1 accepts a VEX that only points at the SBOM's references and ignores it. Checked end to end on the test DT 5.2.1 (export, cyclonedx-cli 0.27.2 hierarchical merge, tag, VEX, Periskope's sync with its read-only key).
+- First sign-in: while the instance's collector reads a person's GitLab rights, `/me` names the instances still being read and the interface waits (« Lecture de vos droits GitLab ») instead of showing « 0 projet »; after 15 s it opens with a banner and reloads by itself once the rights are read. A rights entry still in use is read again before it expires.
+- Dependency-Track: lapsed exceptions are counted the same way in the work items, the exceptions page and the indicators (a retired version no longer counts in one and not the others); the list of delivered versions counts only the findings its pages show; a delivered version none of whose bricks the viewer sees is a 404.
+- Project sync: a project deleted and created again at the same path, or two projects that swap paths, no longer stop the whole sync of the instance.
+- The portfolio sorted by last success pages to the end again (the second page failed).
+- Vulnerabilities: the severity filter is applied by the API, over every CVE, not over the 1 000 first.
+- Administration: the audit log pages on (date, target), so the hundreds of rows of one bulk scope decision are all shown; every excluded project is listed, not the first 100; a filter for the fixes made from Periskope.
+- Screens: missing practices read as projects without the practice (red bar, « 65 / 91 projets sans »), never as a score; the tables of an open CVE stay inside their cards; the level-1 tile is green only when every project has its foundation; the Immediate deadline comes from the settings; a score change with no evidence change says it comes from the scope or the target level; scope and branch selections no longer carry over to another level or project.
+
 ## 1.6.1 — 2026-11-16
 
 - CI: the `python` job installs git, which the repository listing test of 1.5.2 drives; `main` had been red since. 1.6.0 was tagged but its images were never built (the lab runner failed three times), so 1.6.1 is the first published 1.6.

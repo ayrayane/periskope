@@ -252,4 +252,9 @@ export interface Me {
   sub: string;
   username: string;
   admin: boolean;
+  reads_all: boolean;
+  // Instances whose GitLab rights are still being read. An API older than this page does not send it.
+  pending?: string[];
 }
+/** Who is signed in, asked the same way everywhere so that the pages share one answer. */
+export const meQuery = { queryKey: ["me"], queryFn: () => api<Me>("/me"), staleTime: 60_000 };

@@ -105,7 +105,7 @@ function DiffView({ diff, error, id, title }: { diff?: Diff; error: Error | null
         Par rapport à l'analyse {d.before.id} sur <code>{d.before.branch}</code> du {when(d.before.finished_at)}
         {delta != null && <> · score {delta > 0 ? `+${delta}` : delta}</>}
       </p>
-      {!d.gained.length && !d.lost.length && !d.changed.length ? <p className="muted">Aucun changement.</p> : (
+      {!d.gained.length && !d.lost.length && !d.changed.length ? <p className="muted">Aucune preuve n'a changé.{delta ? " L'écart de score vient du cadrage ou du niveau cible, modifiés entre les deux analyses." : ""}</p> : (
         <>
           {rows(d.lost, "Perdues", "lost")}
           {rows(d.gained, "Gagnées", "gained")}

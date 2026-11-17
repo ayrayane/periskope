@@ -8,6 +8,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
+from periskope_api import auth
 from periskope_api.auth import Settings, Verifier, viewer
 from periskope_core.settings import Instance
 from periskope_db import connect
@@ -56,26 +57,37 @@ def test_accepted_token_and_role():
 
 class Arq:
     """Cached memberships per user, and a record of the resolution jobs the API asks for."""
-    def __init__(self, members):
-        self.members, self.jobs = members, []
+    def __init__(self, members, ttl=900, answer=None):
+        self.members, self.jobs, self.left, self.answer = members, [], ttl, answer or {}
 
     async def get(self, key):
         return json.dumps(self.members[key]).encode() if key in self.members else None
 
+    async def ttl(self, key):
+        return self.left
+
     async def enqueue_job(self, name, *args, **kw):
         self.jobs.append((name, args))
+        # What the collector writes once asked, if it answers at all.
+        self.members.update(self.answer)
+
+
+@pytest.fixture(autouse=True)
+def short_wait(monkeypatch):
+    monkeypatch.setattr(auth, "MEMBERSHIP_WAIT_S", 0.2)
 
 
 INSTANCE = Instance(slug="gl", name="GitLab", url="https://gitlab.test", tracked_namespaces=["team-a"])
 
 
-def scope(database_url, claims, members=None, permissions=()):
+def scope(database_url, claims, members=None, permissions=(), arq=None):
+    arq = arq or Arq(members or {})
+
     async def run():
         pool = await connect(database_url)
         await bootstrap(pool, {"gl": INSTANCE})
         for p in permissions:
             await pool.execute("INSERT INTO permissions (subject, instance, scope_kind, scope_value, role) VALUES ($1, $2, $3, $4, $5)", claims["sub"], *p)
-        arq = Arq(members or {})
         v = await viewer(pool, arq, verifier(), claims)
         await pool.close()
         return v, arq
@@ -90,6 +102,39 @@ def test_scope_comes_from_gitlab_memberships(database_url):
     assert not v.admin and not v.reads_all and v.namespaces == frozenset({("gl", "team-a"), ("gl", "team-b")})
     # Launching follows the GitLab level, not the Keycloak role: Maintainer of team-a, a mere member of team-b.
     assert v.projects == frozenset({("gl", 42)}) and v.maintains == frozenset({("gl", "team-a")})
+
+
+def test_memberships_still_being_read_are_reported(database_url):
+    sub = f"u-{uuid.uuid4().hex}"
+    claims, arq = {"sub": sub, "preferred_username": "alice"}, Arq({})
+    # The collector has not answered within the wait: the scope says so instead of passing for empty.
+    v, _ = scope(database_url, claims, arq=arq)
+    assert v.pending == frozenset({"gl"}) and not v.namespaces and len(arq.jobs) == 1
+    # Asked again at once: a look at the cache, no second job and no second wait.
+    v, _ = scope(database_url, claims, arq=arq)
+    assert v.pending == frozenset({"gl"}) and len(arq.jobs) == 1
+    arq.members[f"members:{sub}:gl"] = {"groups": ["team-a"], "projects": []}
+    v, _ = scope(database_url, claims, arq=arq)
+    assert not v.pending and v.namespaces == frozenset({("gl", "team-a")})
+
+
+def test_answer_during_the_wait_and_no_gitlab_account(database_url):
+    sub = f"u-{uuid.uuid4().hex}"
+    # The collector answers while the API waits. Someone without a GitLab account gets an empty answer, which is an answer.
+    arq = Arq({}, answer={f"members:{sub}:gl": {"groups": [], "projects": []}})
+    v, _ = scope(database_url, {"sub": sub, "preferred_username": "nobody"}, arq=arq)
+    assert not v.pending and not v.namespaces and not v.projects and len(arq.jobs) == 1
+
+
+def test_entry_near_its_end_is_read_again(database_url):
+    sub = f"u-{uuid.uuid4().hex}"
+    members = {f"members:{sub}:gl": {"groups": ["team-a"], "projects": []}}
+    fresh, ending = Arq(dict(members)), Arq(dict(members), ttl=120)
+    for arq in (fresh, ending):
+        v, _ = scope(database_url, {"sub": sub, "preferred_username": "alice"}, arq=arq)
+        assert v.namespaces == frozenset({("gl", "team-a")}) and not v.pending
+    # Both are served from the cache; only the entry about to expire is asked again, in the background.
+    assert not fresh.jobs and [name for name, _ in ending.jobs] == ["resolve_memberships"]
 
 
 def test_unverified_email_never_reaches_gitlab(database_url):

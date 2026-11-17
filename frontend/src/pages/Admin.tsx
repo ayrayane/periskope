@@ -155,7 +155,14 @@ function SettingsForm() {
 
 function Excluded() {
   const client = useQueryClient();
-  const list = useQuery({ queryKey: ["admin-excluded"], queryFn: () => api<{ items: { id: number; instance: string; path: string; excluded_reason: string | null }[] }>("/admin/projects/excluded") });
+  const list = useInfiniteQuery({
+    queryKey: ["admin-excluded"],
+    queryFn: ({ pageParam }) => api<{ items: { id: number; instance: string; path: string; excluded_reason: string | null }[]; next_cursor: number | null }>(
+      `/admin/projects/excluded${pageParam ? `?cursor=${pageParam}` : ""}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+  const items = list.data?.pages.flatMap((p) => p.items) ?? [];
   const reinstate = useMutation({
     mutationFn: (p: { instance: string; path: string }) => api(projectUrl(p.instance, p.path), { method: "PATCH", body: JSON.stringify({ enabled: true }) }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["admin-excluded"] }),
@@ -164,11 +171,11 @@ function Excluded() {
     <section className="group" aria-labelledby="a-excluded">
       <h2 id="a-excluded">Projets exclus</h2>
       <p className="muted small">Exclus à la synchronisation (projets personnels, archivés, vides, namespaces exclus). Réintégrer un projet l'emporte sur la règle automatique.</p>
-      {list.data && !list.data.items.length ? <p className="muted">Aucun projet exclu.</p> : (
+      {list.data && !items.length ? <p className="muted">Aucun projet exclu.</p> : (
         <table aria-labelledby="a-excluded">
           <thead><tr><th scope="col">Projet</th><th scope="col">Motif</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
-            {list.data?.items.map((p) => (
+            {items.map((p) => (
               <tr key={p.id}>
                 <td>{p.path}<br /><span className="muted small">{p.instance}</span></td>
                 <td>{p.excluded_reason ?? "—"}</td>
@@ -178,6 +185,7 @@ function Excluded() {
           </tbody>
         </table>
       )}
+      {list.hasNextPage && <button type="button" className="secondary" disabled={list.isFetchingNextPage} onClick={() => list.fetchNextPage()}>Afficher plus de projets exclus</button>}
       {reinstate.isError && <p className="error" role="alert">{(reinstate.error as Error).message}</p>}
     </section>
   );
@@ -187,10 +195,10 @@ function Audit() {
   const [action, setAction] = useState("");
   const log = useInfiniteQuery({
     queryKey: ["admin-audit", action],
-    queryFn: ({ pageParam }) => api<{ items: { at: string; actor: string; action: string; target: string; before: unknown; after: unknown }[]; next_before: string | null }>(
-      `/admin/audit?${new URLSearchParams({ ...(action ? { action } : {}), ...(pageParam ? { before: pageParam } : {}) })}`),
-    initialPageParam: "",
-    getNextPageParam: (last) => last.next_before ?? undefined,
+    queryFn: ({ pageParam }) => api<{ items: { at: string; actor: string; action: string; target: string; before: unknown; after: unknown }[]; next_before: string | null; next_target: string | null }>(
+      `/admin/audit?${new URLSearchParams({ ...(action ? { action } : {}), ...pageParam })}`),
+    initialPageParam: {} as Record<string, string>,
+    getNextPageParam: (last) => (last.next_before ? { before: last.next_before, before_target: last.next_target ?? "" } : undefined),
   });
   const rows = log.data?.pages.flatMap((p) => p.items) ?? [];
   return (
@@ -199,7 +207,7 @@ function Audit() {
       <label className="chip">Action
         <select value={action} onChange={(e) => setAction(e.target.value)}>
           <option value="">toutes</option><option value="run">lancements</option><option value="scope">cadrage</option>
-          <option value="project">projets</option><option value="settings">réglages</option><option value="instance">instances</option>
+          <option value="project">projets</option><option value="fix">corrections dans GitLab</option><option value="settings">réglages</option><option value="instance">instances</option>
         </select>
       </label>
       {log.data && !rows.length ? <p className="muted">Aucune entrée.</p> : (

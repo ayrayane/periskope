@@ -1,7 +1,7 @@
 // Scope: retain or exclude checks and activities, with a reason, one by one or in bulk after filtering. Shows inherited decisions.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { api, Check, Me, ScopeRow } from "../api";
+import { api, Check, meQuery, ScopeRow } from "../api";
 import { when } from "../components/status";
 import { practice } from "../labels";
 
@@ -111,7 +111,7 @@ export function ScopeEditor({ where, canEdit }: { where: Where; canEdit: boolean
 }
 
 export default function ScopePage() {
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me"), staleTime: 60_000 });
+  const me = useQuery(meQuery);
   const instances = useQuery({ queryKey: ["instances"], queryFn: () => api<{ slug: string; name: string }[]>("/instances") });
   const [instance, setInstance] = useState("");
   return (
@@ -126,7 +126,7 @@ export default function ScopePage() {
         </label>
       </div>
       <p className="muted">Une preuve ou une activité écartée sort du score, de la couverture et de la feuille de route. La décision la plus précise l'emporte : projet, puis instance, puis organisation. Les analyses passées ne changent pas.</p>
-      <ScopeEditor where={{ instance: instance || undefined }} canEdit={!!me.data?.admin} />
+      <ScopeEditor key={instance} where={{ instance: instance || undefined }} canEdit={!!me.data?.admin} />
     </section>
   );
 }

@@ -46,6 +46,8 @@ export default function Project() {
   const [params, setParams] = useSearchParams();
   const [branch, setBranch] = useState<string | null>(null);
   const [branchInvalid, setBranchInvalid] = useState(false);
+  // The page stays mounted from one project to the next: a branch picked on the previous one is not this one's.
+  useEffect(() => { setBranch(null); setBranchInvalid(false); }, [url]);
 
   const project = useQuery({ queryKey: ["project", url], queryFn: () => api<P>(url) });
   const scope = useScopeData();
@@ -123,7 +125,7 @@ export default function Project() {
       <div className="run-bar">
         {p.can_launch && (
           <>
-            <BranchPicker url={url} value={p.default_branch ?? ""} onChange={(b, invalid) => { setBranch(b); setBranchInvalid(invalid); }} />
+            <BranchPicker key={url} url={url} value={p.default_branch ?? ""} onChange={(b, invalid) => { setBranch(b); setBranchInvalid(invalid); }} />
             <button type="button" className="primary" disabled={launch.isPending || branchInvalid || (running && !onBranch)}
               onClick={() => launch.mutate(onBranch)}>
               {running && !onBranch ? "Analyse en cours…" : onBranch ? "Analyser la branche" : "Lancer une analyse"}
@@ -156,7 +158,7 @@ export default function Project() {
       </div>
       <section role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
         {tab === "cadrage" ? (
-          <ScopeEditor where={{ instance: p.instance, project: p.path }} canEdit={p.can_launch} />
+          <ScopeEditor key={`${p.instance}/${p.path}`} where={{ instance: p.instance, project: p.path }} canEdit={p.can_launch} />
         ) : tab === "branches" ? (
           <Branches url={url} project={p} busy={launch.isPending} onLaunch={(b) => launch.mutate(b === p.default_branch ? null : b)} />
         ) : !p.last_run && tab !== "historique" ? (
@@ -176,7 +178,7 @@ export default function Project() {
           <section className="card vulns vulns-project" aria-labelledby="vulns-title">
             <h2 id="vulns-title">Vulnérabilités ouvertes {p.vulns && <span className="muted">{total(p.vulns)}</span>}</h2>
             {p.vulns ? <VulnBar v={p.vulns} /> : <p className="muted">{NOT_MEASURED}</p>}
-            {p.dt && <p className="muted small">Dépendances et images d'après Dependency-Track ; code, secrets et application d'après GitLab. <Link to={`/vulnerabilites?vue=projets&q=${encodeURIComponent(p.path)}`}>Détail par CVE</Link></p>}
+            {p.dt && <p className="muted small">Dépendances et images d'après Dependency-Track ; code, secrets et application d'après GitLab. <Link to={`/vulnerabilites?vue=projets&q=${encodeURIComponent(p.path)}`}>Voir ce projet dans la page Vulnérabilités</Link></p>}
             {!p.dt && results["gitlab.sbom_artifact"]?.status === "fail" && <p className="banner">Aucun SBOM CycloneDX publié par le pipeline : GitLab ne peut pas rapprocher les dépendances des CVE, un zéro ici ne prouve rien.</p>}
             {p.vulns && gitlab && !DEMO && <a href={`${gitlab.url.replace(/\/$/, "")}/${p.path}/-/security/vulnerability_report`} target="_blank" rel="noreferrer">Voir le détail dans GitLab ↗<span className="sr-only"> (nouvel onglet)</span></a>}
           </section>

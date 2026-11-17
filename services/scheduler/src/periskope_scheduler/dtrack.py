@@ -1,6 +1,6 @@
-"""Dependency-Track, read only: its projects of a GitLab path, the delivered versions (collection projects the GitOps repository
-fills) and their bricks, the components and findings of the versions that run, the analyses (VEX, exceptions) and the freshness
-of its vulnerability sources. Periskope never writes to DT."""
+"""Dependency-Track, read only: its projects of a GitLab path, the delivered versions (projects the GitOps template builds from the
+chosen brick versions) and their bricks, the components and findings of the versions that run, the analyses (VEX, exceptions) and
+the freshness of its vulnerability sources. Periskope never writes to DT."""
 from __future__ import annotations
 
 import re
@@ -17,6 +17,8 @@ from periskope_db.dt import SEVERITIES, is_exception, rebuild
 log = structlog.get_logger()
 
 PAGE = 500
+# The tag the GitOps template puts on the DT project of a delivered version (« CMS » version « 5.2.0 »).
+DELIVERY = "version-livree"
 # The end date of an exception, written in its DT analysis detail (from the VEX file): « expire 2027-03-01 », « échéance : … ».
 EXPIRES = re.compile(r"(?:expir\w*|échéance|until|jusqu'au)\D{0,15}(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
 
@@ -88,9 +90,9 @@ async def link(db: asyncpg.Pool, instance: str) -> dict[str, int]:
 
 
 async def sync(db: asyncpg.Pool, dt: httpx.AsyncClient | None = None) -> dict[str, int]:
-    """Reads the collection projects into dt_collections, their bricks and the DT projects of a GitLab path into dt_projects, the
-    findings of the versions that run (the collections' bricks, else the project's latest SBOM) into dt_findings, then rebuilds
-    each project's open findings."""
+    """Reads the delivered versions into dt_collections, their bricks and the DT projects of a GitLab path into dt_projects, which
+    delivered versions hold which brick into dt_members, the findings of the versions that run (the bricks of the delivered versions,
+    else the project's latest SBOM) into dt_findings, then rebuilds each project's open findings."""
     if dt is None:
         async with client() as c:
             return await sync(db, c)
@@ -98,12 +100,22 @@ async def sync(db: asyncpg.Pool, dt: httpx.AsyncClient | None = None) -> dict[st
     projects = await link(db, env("DT_INSTANCE", ""))
     known = {r["uuid"]: r for r in await db.fetch("SELECT uuid, bom_at, components, no_purl FROM dt_projects")}
     every = {p["uuid"]: p for p in await pages(dt, "/v1/project", excludeInactive="false")}
-    # A delivered version: a collection project (DT 4.13+), named after the product, its version the delivery's.
-    collections = [p for p in every.values() if p.get("collectionLogic") not in (None, "NONE")]
-    # A brick is a child of a collection, whatever its name; any other project counts only under a GitLab path.
-    bricks = {c["uuid"]: {**c, "parent": {"uuid": k["uuid"]}} for k in collections
-              for c in await pages(dt, f"/v1/project/{k['uuid']}/children", excludeInactive="false")}
-    kept = bricks | {u: p for u, p in every.items() if p["name"].lower() in projects and u not in bricks}
+    # A delivered version: a DT project tagged « version-livree », named after the product, its version the delivery's. Its SBOM is
+    # the chosen brick versions merged, each brick a component named and versioned as its own DT project.
+    deliveries = [p for p in every.values() if DELIVERY in {t.get("name", "").lower() for t in p.get("tags") or []}]
+    own = {(p["name"].lower(), p.get("version")): p for p in every.values() if DELIVERY not in {t.get("name", "").lower() for t in p.get("tags") or []}}
+    # A brick: a component of a delivered version that is also a DT project of its own (same name, same version), whatever its name.
+    # Its findings and analyses are read there, once, however many delivered versions hold it.
+    # shortcut: every component of every delivered version is listed each hour; the bricks alone (onlyDirect) once DT's dependency graph is relied on.
+    members: dict[tuple[str, str], None] = {}
+    for d in deliveries:
+        for c in await pages(dt, f"/v1/component/project/{d['uuid']}"):
+            names = [c["name"].lower()] + ([f"{c['group']}/{c['name']}".lower()] if c.get("group") else [])
+            if hit := next((own[(n, c.get("version"))] for n in names if (n, c.get("version")) in own), None):
+                members[(d["uuid"], hit["uuid"])] = None
+    bricks = {u: every[u] for _, u in members}
+    delivered = {d["uuid"] for d in deliveries}
+    kept = bricks | {u: p for u, p in every.items() if p["name"].lower() in projects and u not in bricks and u not in delivered}
     latest: dict[int, dict] = {}
     for p in kept.values():
         pid = projects.get(p["name"].lower())
@@ -131,17 +143,19 @@ async def sync(db: asyncpg.Pool, dt: httpx.AsyncClient | None = None) -> dict[st
                 if row["state"] not in (None, "NOT_SET") or row["suppressed"]:
                     await analysis(dt, p["uuid"], row, conf.exception_days)
             findings[p["uuid"]] = found
-        rows.append((p["uuid"], p["name"], p.get("version"), (p.get("parent") or {}).get("uuid"), p.get("active", True), bom_at,
+        rows.append((p["uuid"], p["name"], p.get("version"), p.get("active", True), bom_at,
                      "deploiement-par-tag" in tags, components, no_purl, pid))
     async with db.acquire() as conn, conn.transaction():
         await conn.execute("DELETE FROM dt_collections")
         await conn.executemany("INSERT INTO dt_collections (uuid, name, version, active) VALUES ($1, $2, $3, $4)",
-                               [(k["uuid"], k["name"], k.get("version"), k.get("active", True)) for k in collections])
+                               [(k["uuid"], k["name"], k.get("version"), k.get("active", True)) for k in deliveries])
         await conn.execute("DELETE FROM dt_projects WHERE NOT (uuid = ANY($1::text[]))", [r[0] for r in rows])
         await conn.executemany(
-            "INSERT INTO dt_projects (uuid, name, version, parent, active, bom_at, by_tag, components, no_purl, project_id, synced_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now()) ON CONFLICT (uuid) DO UPDATE SET name = $2, version = $3, parent = $4,"
-            " active = $5, bom_at = $6, by_tag = $7, components = $8, no_purl = $9, project_id = $10, synced_at = now()", rows)
+            "INSERT INTO dt_projects (uuid, name, version, active, bom_at, by_tag, components, no_purl, project_id, synced_at)"
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now()) ON CONFLICT (uuid) DO UPDATE SET name = $2, version = $3,"
+            " active = $4, bom_at = $5, by_tag = $6, components = $7, no_purl = $8, project_id = $9, synced_at = now()", rows)
+        # Emptied with dt_collections above (cascade): which delivered versions hold which brick, as read now.
+        await conn.executemany("INSERT INTO dt_members (tree, project) VALUES ($1, $2)", list(members))
         # Findings of the versions no longer read are dropped with the others: only what runs is kept.
         await conn.execute("DELETE FROM dt_findings")
         cols = ["project", "component", "vuln", "key", "cve", "severity", "title", "component_name", "component_version", "purl", "vector", "kev", "epss",
@@ -151,8 +165,8 @@ async def sync(db: asyncpg.Pool, dt: httpx.AsyncClient | None = None) -> dict[st
         await conn.copy_records_to_table("dt_findings", records=records, columns=cols)
         await rebuild(conn)
     await sources(db, dt)
-    log.info("dt_synced", collections=len(collections), projects=len(rows), read=len(findings), findings=sum(map(len, findings.values())))
-    return {"collections": len(collections), "projects": len(rows), "read": len(findings)}
+    log.info("dt_synced", deliveries=len(deliveries), projects=len(rows), read=len(findings), findings=sum(map(len, findings.values())))
+    return {"deliveries": len(deliveries), "projects": len(rows), "read": len(findings)}
 
 
 async def sources(db: asyncpg.Pool, dt: httpx.AsyncClient) -> None:

@@ -26,17 +26,16 @@ export function Versions() {
     <>
       <section className="card" aria-labelledby="versions-title">
         <h2 id="versions-title">Versions livrées</h2>
-        <p className="card-sub">Les projets collection de Dependency-Track, un par version livrée d'un CMS (remplis par le dépôt GitOps) : leurs briques, leur SBOM et leurs CVE.</p>
+        <p className="card-sub">Un projet Dependency-Track par version livrée d'un CMS, construit par le dépôt GitOps à partir des versions de briques choisies : leurs briques, leur SBOM et leurs CVE.</p>
         {list.length === 0 ? <p className="muted">Aucune version livrée dans Dependency-Track pour les projets que vous voyez.</p> : (
           <table aria-labelledby="versions-title" className="vuln-table">
-            <thead><tr><th scope="col">Version</th><th scope="col">Type</th><th scope="col" className="num">Briques</th><th scope="col" className="num">Sans SBOM</th>
+            <thead><tr><th scope="col">Version</th><th scope="col" className="num">Briques</th><th scope="col" className="num">Sans SBOM</th>
               <th scope="col" className="num">CVE ouvertes</th><th scope="col" className="num">Immédiat</th><th scope="col">Comparer</th></tr></thead>
             <tbody>
               {list.map((t) => (
                 <tr key={t.uuid} aria-selected={t.uuid === a} className={t.uuid === a ? "selected" : undefined}>
                   <td><button type="button" className="link vuln-key" onClick={() => set("version", t.uuid)}>{t.name}</button>
                     {!t.active && <span className="muted small vuln-title">ne tourne plus</span>}</td>
-                  <td>{treeKind(t.env)}</td>
                   <td className="num">{t.bricks}</td>
                   <td className="num">{t.no_sbom ? <span className="badge tone-fail">{t.no_sbom}</span> : 0}</td>
                   <td className="num">{t.open}</td>
@@ -62,7 +61,7 @@ function Findings({ items, empty }: { items: DtFinding[]; empty: string }) {
       <tbody>
         {items.map((f) => (
           <tr key={f.key}>
-            <td><Link to={`/vulnerabilites/cve/${encodeURIComponent(f.key)}`} className="vuln-key">{f.key}</Link>
+            <td><Link to={`/vulnerabilites/cve/${encodeURIComponent(f.key)}`} className="vuln-key vuln-id">{f.key}</Link>
               {f.kev && <span className="badge tone-fail kev">Exploitée (KEV)</span>}{f.title && <span className="muted small vuln-title">{f.title}</span>}</td>
             <td><SevTag s={f.severity} /></td>
             <td><Response r={f.response} /></td>
@@ -143,7 +142,7 @@ export function ProjectBricks({ bricks }: { bricks: DtBrick[] }) {
   return (
     <section className="card" aria-labelledby="dt-bricks-title">
       <h2 id="dt-bricks-title">Versions déployées (Dependency-Track)</h2>
-      <p className="card-sub">Les dépendances et images de ce projet sont suivies par Dependency-Track dans chaque environnement et chaque version livrée.</p>
+      <p className="card-sub">Les dépendances et images de ce projet sont suivies par Dependency-Track : dans chaque version livrée qui l'embarque ou, hors version livrée, sur son dernier SBOM.</p>
       <Bricks first="Où elle tourne" rows={bricks.map((b) => ({ ...b, label: <>{b.tree}<span className="muted small vuln-title">{treeKind(b.env)}</span></> }))} />
     </section>
   );
@@ -175,9 +174,9 @@ export function Exceptions({ qs }: { qs: URLSearchParams }) {
             <tbody>
               {exceptions.map((e, i) => (
                 <tr key={i}>
-                  <td><Link to={`/vulnerabilites/cve/${encodeURIComponent(e.key)}`}>{e.key}</Link> <SevTag s={e.severity} /></td>
+                  <td><Link to={`/vulnerabilites/cve/${encodeURIComponent(e.key)}`} className="vuln-key vuln-id">{e.key}</Link> <SevTag s={e.severity} /></td>
                   <td>{where(e)}</td>
-                  <td>{e.expired ? <span className="badge tone-fail">expirée le {day(e.expires_on)}</span> : day(e.expires_on)}</td>
+                  <td className="age-late">{e.expired ? <>{day(e.expires_on)} <span className="badge tone-fail">expirée</span></> : day(e.expires_on)}</td>
                   <td className="small">{e.detail ?? "—"}</td>
                 </tr>
               ))}
@@ -194,7 +193,7 @@ export function Exceptions({ qs }: { qs: URLSearchParams }) {
             <tbody>
               {not_concerned.map((e, i) => (
                 <tr key={i}>
-                  <td><Link to={`/vulnerabilites/cve/${encodeURIComponent(e.key)}`}>{e.key}</Link></td>
+                  <td><Link to={`/vulnerabilites/cve/${encodeURIComponent(e.key)}`} className="vuln-key vuln-id">{e.key}</Link></td>
                   <td>{where(e)}</td>
                   <td className="small">{(e.justification && JUSTIFICATION[e.justification]) ?? (e.state === "FALSE_POSITIVE" ? "faux positif" : "—")}{e.detail && <span className="muted small vuln-title">{e.detail}</span>}</td>
                   <td>{day(e.analysed_at)}</td>

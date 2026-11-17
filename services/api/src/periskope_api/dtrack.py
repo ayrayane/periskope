@@ -1,4 +1,4 @@
-"""Dependency-Track views: the delivered versions (collection projects) and their comparison, the follow-up sheet of a CVE, exceptions and VEX,
+"""Dependency-Track views: the delivered versions (projects tagged « version-livree ») and their comparison, the follow-up sheet of a CVE, exceptions and VEX,
 DT's work items, and the indicators for management. A viewer sees only the bricks of the projects they may see.
 
 No `from __future__ import annotations` here: FastAPI resolves the closure-local dependencies from real annotations."""
@@ -18,6 +18,13 @@ STATUS = ("CASE WHEN f.state = 'RESOLVED' THEN 'resolved' WHEN f.state IN ('NOT_
 JOIN_FEEDS = "LEFT JOIN vuln_kev k ON k.cve = f.key LEFT JOIN vuln_epss e ON e.cve = f.key"
 SEV = "array_position(ARRAY['critical', 'high', 'medium', 'low', 'info', 'unknown'], f.severity)"
 STALE_DAYS = 2
+# The findings of DT versions that still run: an active brick of at least one active delivered version, or an active project in none.
+IN_FORCE = ("dt_findings f JOIN dt_projects b ON b.uuid = f.project",
+            ("b.active AND (NOT EXISTS (SELECT 1 FROM dt_members m WHERE m.project = b.uuid)"
+             " OR EXISTS (SELECT 1 FROM dt_members m JOIN dt_trees t ON t.uuid = m.tree WHERE m.project = b.uuid AND t.active))"))
+# The active delivered versions a brick b runs in, or « outside any » for a project in none.
+TREES = (f"coalesce((SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM dt_members m JOIN dt_trees t ON t.uuid = m.tree"
+         f" WHERE m.project = b.uuid AND t.active), '{OUTSIDE}')")
 
 
 def router(state: dict[str, Any], current, scoped) -> APIRouter:
@@ -43,15 +50,17 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
         if not env("DT_URL", ""):
             return {"configured": False}
         cond, params = visible(me, instance, namespace, environment)
-        brick = ("SELECT b.uuid, b.name, b.version, b.components, b.no_purl, t.name AS tree, p.instance, p.path FROM dt_bricks b"
-                 " JOIN dt_trees t ON t.uuid = b.root LEFT JOIN projects p ON p.id = b.project_id"
+        # One line per brick, with every active delivered version it runs in.
+        brick = ("SELECT b.uuid, b.name, b.version, b.components, b.no_purl, string_agg(t.name, ', ' ORDER BY t.name) AS tree, p.instance, p.path"
+                 " FROM dt_bricks b JOIN dt_trees t ON t.uuid = b.root LEFT JOIN projects p ON p.id = b.project_id"
                  f" WHERE b.active AND t.active AND {cond}")
+        per_brick = " GROUP BY b.uuid, b.name, b.version, b.components, b.no_purl, p.instance, p.path"
         db = state["db"]
-        no_sbom = await db.fetch(f"{brick} AND b.bom_at IS NULL ORDER BY t.name, b.name LIMIT 200", *params)
-        by_tag = await db.fetch(f"{brick} AND b.by_tag ORDER BY t.name, b.name LIMIT 200", *params)
-        no_purl = await db.fetch(f"{brick} AND b.no_purl > 0 ORDER BY b.no_purl DESC, b.name LIMIT 200", *params)
+        no_sbom = await db.fetch(f"{brick} AND b.bom_at IS NULL{per_brick} ORDER BY tree, b.name LIMIT 200", *params)
+        by_tag = await db.fetch(f"{brick} AND b.by_tag{per_brick} ORDER BY tree, b.name LIMIT 200", *params)
+        no_purl = await db.fetch(f"{brick} AND b.no_purl > 0{per_brick} ORDER BY b.no_purl DESC, b.name LIMIT 200", *params)
         expired = await db.fetchval(
-            f"SELECT count(*) FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project WHERE {STATUS} = 'exception' AND f.expires_on < current_date AND {cond}", *params)
+            f"SELECT count(*) FROM {IN_FORCE[0]} WHERE {IN_FORCE[1]} AND {STATUS} = 'exception' AND f.expires_on < current_date AND {cond}", *params)
         stale = await db.fetch(
             f"SELECT name, completed_at, via FROM vuln_sources WHERE completed_at IS NULL OR completed_at < now() - interval '{STALE_DAYS} days'")
         synced = await db.fetchval("SELECT max(synced_at) FROM dt_projects")
@@ -66,8 +75,8 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
         rows = await state["db"].fetch(
             f"SELECT t.uuid, t.name, t.env, t.active, t.synced_at, count(DISTINCT b.uuid) AS bricks,"
             f" count(DISTINCT b.uuid) FILTER (WHERE b.bom_at IS NULL) AS no_sbom,"
-            f" count(DISTINCT f.key) FILTER (WHERE {STATUS} = 'open') AS open,"
-            f" count(DISTINCT f.key) FILTER (WHERE {STATUS} = 'open' AND {response} = 'immediate') AS immediate"
+            f" count(DISTINCT f.key) FILTER (WHERE b.active AND {STATUS} = 'open') AS open,"
+            f" count(DISTINCT f.key) FILTER (WHERE b.active AND {STATUS} = 'open' AND {response} = 'immediate') AS immediate"
             f" FROM dt_trees t JOIN dt_bricks b ON b.root = t.uuid"
             f" LEFT JOIN dt_findings f ON f.project = b.uuid {JOIN_FEEDS}"
             f" WHERE {cond} GROUP BY t.uuid, t.name, t.env, t.active, t.synced_at ORDER BY t.env, t.active DESC, t.name DESC", *params)
@@ -84,6 +93,8 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
         bricks = await db.fetch(
             "SELECT b.uuid, b.name, b.version, b.active, b.bom_at IS NOT NULL AS sbom, b.by_tag, b.components, b.no_purl, p.instance, p.path"
             f" FROM dt_bricks b LEFT JOIN projects p ON p.id = b.project_id WHERE b.root = {n} AND {cond} ORDER BY b.name", *params)
+        if not bricks:
+            raise HTTPException(404, "version introuvable")
         response = await response_sql()
         found = await db.fetch(
             f"SELECT f.key, bool_or(f.cve) AS cve, min(f.title) AS title, min({SEV}) AS rank, min(array_position(ARRAY['immediate', 'out_of_cycle', 'scheduled', 'deferred'], {response})) AS rrank,"
@@ -149,9 +160,8 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
         cond, params = visible(me, instance, namespace, environment)
         rows = await state["db"].fetch(
             f"SELECT f.key, f.title, f.severity, {STATUS} AS kind, f.state, f.justification, f.response, f.detail, f.analysed_at, f.expires_on,"
-            f" f.expires_on < current_date AS expired, b.name AS brick, b.version, coalesce(t.name, '{OUTSIDE}') AS tree, p.instance, p.path"
-            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project LEFT JOIN dt_bricks m ON m.uuid = b.uuid LEFT JOIN dt_trees t ON t.uuid = m.root"
-            f" LEFT JOIN projects p ON p.id = b.project_id WHERE b.active AND coalesce(t.active, true) AND {STATUS} IN ('exception', 'not_concerned') AND {cond}"
+            f" f.expires_on < current_date AS expired, b.name AS brick, b.version, {TREES} AS tree, p.instance, p.path"
+            f" FROM {IN_FORCE[0]} LEFT JOIN projects p ON p.id = b.project_id WHERE {IN_FORCE[1]} AND {STATUS} IN ('exception', 'not_concerned') AND {cond}"
             f" ORDER BY {STATUS}, f.expires_on NULLS LAST, f.key, b.name LIMIT 2000", *params)
         items = [dict(x) for x in rows]
         return {"exceptions": [x for x in items if x["kind"] == "exception"], "not_concerned": [x for x in items if x["kind"] == "not_concerned"]}
@@ -176,11 +186,11 @@ def router(state: dict[str, Any], current, scoped) -> APIRouter:
             f" LEFT JOIN (vuln_ledger l JOIN projects p ON p.id = l.project_id AND {where}) ON true GROUP BY m.month ORDER BY m.month", *params, months)
         cond, bparams = visible(me, instance, namespace, environment)
         sbom = await db.fetchrow(
-            f"SELECT count(*) AS bricks, count(*) FILTER (WHERE b.bom_at IS NOT NULL) AS with_sbom FROM dt_bricks b JOIN dt_trees t ON t.uuid = b.root"
+            f"SELECT count(DISTINCT b.uuid) AS bricks, count(DISTINCT b.uuid) FILTER (WHERE b.bom_at IS NOT NULL) AS with_sbom FROM dt_bricks b JOIN dt_trees t ON t.uuid = b.root"
             f" WHERE b.active AND t.active AND coalesce(t.env, 'prod') = 'prod' AND {cond}", *bparams)
         exc = await db.fetchrow(
             f"SELECT count(*) FILTER (WHERE f.expires_on >= current_date) AS active, count(*) FILTER (WHERE f.expires_on < current_date) AS expired"
-            f" FROM dt_findings f JOIN dt_projects b ON b.uuid = f.project WHERE b.active AND {STATUS} = 'exception' AND {cond}", *bparams)
+            f" FROM {IN_FORCE[0]} WHERE {IN_FORCE[1]} AND {STATUS} = 'exception' AND {cond}", *bparams)
         return {"months": [{"month": x["month"].date().isoformat(), "critical_fixed": x["critical_fixed"], "critical_on_time": x["critical_on_time"],
                             "days": {k: None if x[f"days_{k}"] is None else round(float(x[f"days_{k}"]), 1) for k in ("critical", "high", "medium", "low")}, "overdue_stock": x["overdue_stock"]} for x in monthly],
                 "sbom": dict(sbom) if env("DT_URL", "") else None, "exceptions": dict(exc) if env("DT_URL", "") else None}

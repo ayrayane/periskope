@@ -113,13 +113,25 @@ VIEW_VULNERABILITY and SYSTEM_CONFIGURATION_READ, the last one to read when the 
 
 - **Projects**: DT mirrors GitLab, each project named by its full GitLab path (`cms/back/brique-a`) and versioned; groups and
   projects of no GitLab path of `dependencyTrack.instance` are ignored.
-- **Delivered versions**: a DT collection project (DT 4.13+), named after the CMS, its version the delivery's, whose children are
-  the brick versions the GitOps repository chose (neither the latest nor the same number). Periskope reads every collection by
-  itself; a delivered version counts as production. Its bricks feed the production evidence (version, SBOM, deployment by digest)
+- **Delivered versions**: a DT project tagged `version-livree`, named after the CMS, its version the delivery's. The GitOps
+  template builds it: it exports the SBOM of each brick version chosen (neither the latest nor the same number), merges them so
+  that each brick is a component named and versioned as its own DT project, uploads the result with the tag, then uploads each
+  brick's VEX. Calls, checked on DT 5.2.1: `GET /api/v1/bom/cyclonedx/project/{uuid}?format=json&variant=inventory` (its
+  `metadata.component` is the DT project's name and version), `cyclonedx merge --hierarchical --name <CMS> --version <version>`
+  (cyclonedx-cli 0.27.2: each brick stays a top-level component with its dependencies under it), `PUT /api/v1/bom` with
+  `projectName`, `projectVersion`, `autoCreate: true` and `projectTags: [{"name": "version-livree"}]`, then `PUT /api/v1/vex` per
+  brick. A VEX must list the components it concerns in its own `components[]` (purl, name, version) and point `affects[].ref` at
+  their `bom-ref`: DT resolves the reference inside the VEX, then matches the component in the project; a VEX pointing at the
+  SBOM's `bom-ref`s only is accepted and silently ignored (DT logs « Unable to locate affected element »). A brick version may be
+  in any number of delivered versions, of one CMS or of several. Periskope finds every
+  delivered version by itself; its bricks are its components that match a DT project of their own (same name, same version), whose
+  findings and analyses are read there, once. A delivered version counts as production. Its bricks feed the production evidence (version, SBOM, deployment by digest)
   and the CVE exposure. A project in no delivered version counts its latest SBOM, without environment (its GitLab topics tell the
   exposure, and stay the fallback of the production evidence). A brick without SBOM, or tagged `deploiement-par-tag` by the GitOps
-  job, is listed in « Travail à faire »; so are bricks with components without purl. DT keeps one parent per project: one brick
-  version cannot sit in two collections.
+  job, is listed in « Travail à faire »; so are bricks with components without purl. VEX decisions are taken in the brick's VEX
+  file, never by hand in DT: the template copies them into each delivered version, and a decision made by hand there would hold
+  for that delivered version alone. DT's own totals count a delivered brick twice (its project and each delivered version);
+  Periskope does not.
 - **Findings**: DT's replace GitLab's dependency and container findings (GitLab keeps SAST, secrets and DAST), one per CVE (a GHSA
   is keyed by its CVE alias). KEV and EPSS come from Periskope's feeds, else from DT. A finding analysed `NOT_AFFECTED` or
   `FALSE_POSITIVE` is « non concernée » (VEX); a suppressed one, or one answered `WILL_NOT_FIX`/`CAN_NOT_FIX`, is an exception

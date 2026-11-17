@@ -77,7 +77,7 @@ export default function CveSheet() {
                           <td><Link to={`/p/${l.instance}/${l.path}?vue=vulnerabilites`}>{l.path}</Link><span className="muted small vuln-title"><Response r={l.response} /></span></td>
                           <td>{day(l.opened_at)}</td>
                           <td>{l.deadline_at ? day(l.deadline_at) : "sans délai"}</td>
-                          <td>{l.closed_at ? <>{day(l.closed_at)} {late && <span className="badge tone-fail">après l'échéance</span>}</> : late ? <span className="badge tone-fail">ouverte, hors délai</span> : "ouverte"}</td>
+                          <td className="age-late">{l.closed_at ? <>{day(l.closed_at)} {late && <span className="badge tone-fail">après l'échéance</span>}</> : late ? <>ouverte <span className="badge tone-fail">hors délai</span></> : "ouverte"}</td>
                         </tr>
                       );
                     })}

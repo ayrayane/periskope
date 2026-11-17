@@ -1,6 +1,6 @@
 // Open vulnerabilities of the scope, by CVE (search one, see every project it touches) or by project (most impacted first).
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, DtWork, Feed, ProjectRow, Sla, Source, Summary, VulnByProject, VulnCoverage, VulnItem, VulnProject } from "../api";
 import { Exceptions, Versions } from "../components/Dtrack";
@@ -43,6 +43,7 @@ export default function Vulnerabilities() {
   const scope = new URLSearchParams(scopeQuery(instance, namespace, get("env")));
   const listQs = new URLSearchParams(scope);
   if (get("q")) listQs.set("q", get("q")!);
+  if (severity) listQs.set("severity", severity);
   const list = useQuery({ queryKey: ["vulns", listQs.toString()], enabled: byCve, queryFn: () => api<{ measured: number; items: VulnItem[]; sla_hours: Sla }>(`/vulnerabilities?${listQs}`), placeholderData: keepPreviousData });
   const projects = useQuery({
     queryKey: ["vuln-projects", key, scope.toString()], enabled: !!key,
@@ -57,7 +58,7 @@ export default function Vulnerabilities() {
   const dt = useQuery({ queryKey: ["dt-work", scope.toString()], queryFn: () => api<DtWork>(`/dt/work?${scope}`), staleTime: 60_000 });
   const { instances } = useScopeData();
   const name = (slug: string) => instances.find((i) => i.slug === slug)?.name ?? slug;
-  const items = (list.data?.items ?? []).filter((v) => !severity || v.severity === severity);
+  const items = list.data?.items ?? [];
   const selected = list.data?.items.find((v) => v.key === key);
 
   return (
@@ -151,7 +152,7 @@ export default function Vulnerabilities() {
                   {items.map((v) => (
                     <tr key={v.key} aria-selected={v.key === key} className={v.key === key ? "selected" : undefined}>
                       <td>
-                        <button type="button" className="link vuln-key" onClick={() => set({ cve: v.key })}>{v.cve ? v.key : v.title}</button>
+                        <button type="button" className={`link vuln-key${v.cve ? " vuln-id" : ""}`} onClick={() => set({ cve: v.key })}>{v.cve ? v.key : v.title}</button>
                         {v.cve && <span className="muted small vuln-title">{v.title}</span>}
                       </td>
                       <td><SevTag s={v.severity} /></td>
@@ -181,14 +182,13 @@ export default function Vulnerabilities() {
                   <>
                     <h3 className="vulns-sub">{projects.data.length} projet{projects.data.length > 1 ? "s" : ""} touché{projects.data.length > 1 ? "s" : ""}</h3>
                     <table aria-label="Projets touchés" className="vuln-table">
-                      <thead><tr><th scope="col">Projet</th><th scope="col">Détectée par</th><th scope="col">Réponse</th><th scope="col">Ouverte depuis</th><th scope="col">Score</th></tr></thead>
+                      <thead><tr><th scope="col">Projet</th><th scope="col">Détectée par</th><th scope="col">Réponse et ancienneté</th><th scope="col">Score</th></tr></thead>
                       <tbody>
                         {projects.data.map((p) => (
                           <tr key={`${p.instance}/${p.path}`}>
-                            <td><Link to={`/p/${p.instance}/${p.path}`}>{p.path}</Link><span className="muted small vuln-title">{name(p.instance)}</span></td>
+                            <td><Link to={`/p/${p.instance}/${p.path}`} title={p.path}>{p.path.split("/").at(-1)}</Link><span className="muted small vuln-title">{name(p.instance)} · {group(p.path)}</span></td>
                             <td>{SCANNER[p.type] ?? p.type}{p.trees && <span className="muted small vuln-title">{p.trees.join(", ")}{p.components?.length ? ` · ${p.components.join(", ")}` : ""}</span>}</td>
-                            <td><Response r={p.response} /></td>
-                            <td><Age since={p.detected_at} overdue={p.overdue} deadline={list.data?.sla_hours[p.response]} /></td>
+                            <td><Response r={p.response} /><span className="vuln-title"><Age since={p.detected_at} overdue={p.overdue} deadline={list.data?.sla_hours[p.response]} /></span></td>
                             <td><Score score={p.score} coverage={p.coverage} /></td>
                           </tr>
                         ))}
@@ -203,6 +203,11 @@ export default function Vulnerabilities() {
       )}
     </article>
   );
+}
+
+/** A project's group path, breakable after each « / » so a narrow column wraps between segments, never inside a name. */
+function group(path: string) {
+  return path.split("/").slice(0, -1).map((seg, i) => <Fragment key={i}>{i > 0 && <>/<wbr /></>}{seg}</Fragment>);
 }
 
 const PRIORITY_COLS: [keyof VulnByProject["by_priority"], string][] = [["critical", "Critique"], ["high", "Élevée"], ["medium", "Moyenne"], ["low", "Faible"]];
@@ -239,7 +244,7 @@ function ByProject({ qs, sla, name }: { qs: URLSearchParams; sla?: Sla; name: (s
           <tbody>
             {rows.map((r) => (
               <tr key={`${r.instance}/${r.path}`}>
-                <td><Link to={`/p/${r.instance}/${r.path}?vue=vulnerabilites`}>{r.path}</Link><span className="muted small vuln-title">{name(r.instance)}</span></td>
+                <td><Link to={`/p/${r.instance}/${r.path}?vue=vulnerabilites`} title={r.path}>{r.path.split("/").at(-1)}</Link><span className="muted small vuln-title">{name(r.instance)} · {group(r.path)}</span></td>
                 {PRIORITY_COLS.map(([k]) => <td key={k} className="num">{r.by_priority[k] ? <span className="sev-tag"><span className={`swatch sev-${k}`} aria-hidden="true" />{r.by_priority[k]}</span> : <span className="muted">0</span>}</td>)}
                 <td className="num">{r.by_response?.immediate ? <span className="badge tone-fail">{r.by_response.immediate}</span> : 0}</td>
                 <td className="num">{r.overdue ? <span className="badge tone-fail">{r.overdue}</span> : 0}</td>

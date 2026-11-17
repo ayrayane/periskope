@@ -1,4 +1,4 @@
-"""Each project's Dependency-Track state (dt_state) from what DT holds: its bricks in the delivered versions (collection projects)
+"""Each project's Dependency-Track state (dt_state) from what DT holds: its bricks in the delivered versions (projects tagged « version-livree »)
 and, outside them, its latest SBOM."""
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ async def rebuild(conn: asyncpg.Connection) -> None:
             item["vector"] = item["vector"] or f["vector"]
             # A delivered version runs in production; a version outside them, in no known environment.
             env = {None: "prod", "none": None}.get(b["env"], b["env"])
-            for k, v in (("envs", env), ("trees", b["tree"]), ("components", f"{f['component_name']}@{f['component_version']}")):
+            for k, v in (("envs", env), ("trees", b["tree"]), ("components", f"{f['component_name']}@{f['component_version'] or ''}")):
                 if v is not None and v not in item[k]:
                     item[k].append(v)
     await conn.execute("DELETE FROM dt_state")

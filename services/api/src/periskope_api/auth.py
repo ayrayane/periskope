@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from typing import ClassVar
 
 import asyncpg
@@ -18,6 +20,12 @@ from periskope_db import Viewer
 # Lowest to highest. "auditor" reads every project without administering; "maintainer" is kept for old realms (same as viewer).
 ROLES = ("viewer", "maintainer", "auditor", "admin")
 MEMBERSHIP_WAIT_S = 2.0
+# A cached entry this close to its end is read again in the background: someone at work never meets an expired one.
+MEMBERSHIP_REFRESH_S = 300
+# After a wait that brought nothing, the next calls only look: a collector that is busy or down must not slow every call.
+MEMBERSHIP_RETRY_S = 10
+# Cache key -> when the last fruitless wait ended.
+_unanswered: dict[str, float] = {}
 
 
 @dataclass
@@ -83,18 +91,24 @@ async def viewer(db: asyncpg.Pool, arq: ArqRedis, verifier: Verifier, claims: di
     )
     if role == "admin":
         return Viewer(sub, username, admin=True)
+    grants = await db.fetch("SELECT instance, scope_kind, scope_value, role FROM permissions WHERE subject = $1", sub)
+    # Before the memberships: an admin named by hand does not wait for GitLab.
+    if any(g["scope_kind"] == "all" and g["role"] == "admin" and g["instance"] is None for g in grants):
+        return Viewer(sub, username, admin=True)
     namespaces: set[tuple[str, str]] = set()
     projects: set[tuple[str, int]] = set()
     maintains: set[tuple[str, str]] = set()
+    pending: set[str] = set()
     slugs = [r["slug"] for r in await db.fetch("SELECT slug FROM gitlab_instances WHERE enabled")]
     for slug, found in zip(slugs, await asyncio.gather(*(membership(arq, sub, username, email, s) for s in slugs))):
+        if found is None:
+            pending.add(slug)
+            continue
         namespaces |= {(slug, g) for g in found.get("groups", [])}
         projects |= {(slug, pid) for _, pid in found.get("projects", [])}
         # Launching and scoping follow GitLab: Maintainer or Owner of the group or project, whatever the Keycloak role.
         maintains |= {(slug, path) for path in found.get("maintains", [])}
-    for g in await db.fetch("SELECT instance, scope_kind, scope_value, role FROM permissions WHERE subject = $1", sub):
-        if g["scope_kind"] == "all" and g["role"] == "admin" and g["instance"] is None:
-            return Viewer(sub, username, admin=True)
+    for g in grants:
         insts = [g["instance"]] if g["instance"] else slugs
         # "all" on an instance is the empty namespace: every project of it (see Viewer.where).
         target = {(i, "" if g["scope_kind"] == "all" else g["scope_value"] or "") for i in insts}
@@ -106,18 +120,29 @@ async def viewer(db: asyncpg.Pool, arq: ArqRedis, verifier: Verifier, claims: di
         if g["role"] in ("maintainer", "admin"):
             maintains |= target
     return Viewer(sub, username, reads_all=role == "auditor", namespaces=frozenset(namespaces), projects=frozenset(projects),
-                  maintains=frozenset(maintains))
+                  maintains=frozenset(maintains), pending=frozenset(pending))
 
 
-async def membership(arq: ArqRedis, sub: str, username: str, email: str | None, instance: str) -> dict:
-    """Cached memberships; on a miss, asks the instance's collector at high priority and waits up to 2 s."""
+async def membership(arq: ArqRedis, sub: str, username: str, email: str | None, instance: str) -> dict | None:
+    """Cached memberships, None while the collector has not read them. A miss asks the instance's collector at high
+    priority and waits up to 2 s; an entry near its end is read again in the background."""
     key = f"members:{sub}:{instance}"
-    if (raw := await arq.get(key)) is not None:
-        return json.loads(raw)
     # shortcut: a negative defer puts the job ahead of the queue; a second ARQ queue per priority would be cleaner.
-    await arq.enqueue_job("resolve_memberships", sub, username, email, _queue_name=queue(instance), _job_id=key, _defer_by=timedelta(hours=-1))
+    ask = partial(arq.enqueue_job, "resolve_memberships", sub, username, email, _queue_name=queue(instance), _job_id=key,
+                  _defer_by=timedelta(hours=-1))
+    if (raw := await arq.get(key)) is not None:
+        _unanswered.pop(key, None)
+        if await arq.ttl(key) < MEMBERSHIP_REFRESH_S:
+            await ask()
+        return json.loads(raw)
+    if time.monotonic() - _unanswered.get(key, float("-inf")) < MEMBERSHIP_RETRY_S:
+        return None
+    await ask()
     for _ in range(int(MEMBERSHIP_WAIT_S / 0.1)):
         await asyncio.sleep(0.1)
         if (raw := await arq.get(key)) is not None:
             return json.loads(raw)
-    return {}
+    if len(_unanswered) > 10_000:
+        _unanswered.clear()
+    _unanswered[key] = time.monotonic()
+    return None

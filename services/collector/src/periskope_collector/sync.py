@@ -45,6 +45,10 @@ async def sync_projects(db: asyncpg.Pool, gl: GitLab, instance: Instance) -> dic
                          p["path_with_namespace"].replace("/", "_"), _ts(p.get("last_activity_at")),
                          [t.lower() for t in p.get("topics") or []]))
     async with db.acquire() as conn, conn.transaction():
+        # A path now held by another GitLab project (deleted and created again, or swapped): its old row gives it up first.
+        await conn.execute(
+            "UPDATE projects p SET path = p.path || ' #' || p.gitlab_id FROM unnest($2::bigint[], $3::text[]) AS n(id, path)"
+            " WHERE p.instance = $1 AND p.path = n.path AND p.gitlab_id <> n.id", instance.slug, [r[1] for r in rows], [r[2] for r in rows])
         await conn.executemany(
             """INSERT INTO projects (instance, gitlab_id, path, namespace_path, namespace_kind, default_branch, archived,
                                      excluded_reason, enabled, sonar_key, last_activity_at, topics)

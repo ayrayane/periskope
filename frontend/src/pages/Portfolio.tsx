@@ -12,6 +12,7 @@ import Radar from "../components/Radar";
 import { PracticeCell, PracticeCounts, Score, Skeleton, when } from "../components/status";
 import { dimension, practice } from "../labels";
 import { FAMILIES, FamilyIcon, familySlot } from "../components/Dsomm";
+import { span } from "../components/Vulns";
 
 type Sort = "name" | "score" | "last_run";
 // What moves at a low maturity: the level-1 foundation, the trend, and what is not measured at all.
@@ -113,7 +114,9 @@ export default function Portfolio() {
           <Score score={s?.score ?? null} coverage={s?.coverage ?? null} size="lg" />
           <span className="kpi-label">Score moyen <Help term="score" label="le score" /><br />{s ? `${s.analysed} projet${s.analysed > 1 ? "s" : ""} analysé${s.analysed > 1 ? "s" : ""} sur ${s.total}` : "…"}</span>
         </div>
-        {tile(tabUrl("inventaire", { foundation_missing: "true" }), "pass", s ? `${s.foundation_ok}` : "—", "Socle niveau 1 en place",
+        {/* Green only when every analysed project has its foundation: a green 0 would read as good news. */}
+        {tile(tabUrl("inventaire", { foundation_missing: "true" }), !s?.analysed ? "unknown" : s.foundation_ok === s.analysed ? "pass" : s.foundation_ok === 0 ? "fail" : "amber",
+          s ? `${s.foundation_ok}` : "—", "Socle niveau 1 en place",
           s ? `sur ${s.analysed} analysés · ${s.analysed - s.foundation_ok} à compléter` : "")}
         {tile(tabUrl("inventaire", { trend: "up" }), "accent", s?.compared ? `${s.improving}` : "—", "En progrès sur 30 jours",
           s?.compared ? `${s.declining} en recul · ${s.compared} comparables` : "historique de moins de 30 jours")}
@@ -161,7 +164,7 @@ export default function Portfolio() {
   // The work a lead has to hand out, most urgent first; a line appears only when there is something behind it.
   const work = (!s ? [] : [
     [overdue, "Vulnérabilités hors délai", "Ouvertes depuis plus longtemps que le délai de leur réponse SSVC", `/vulnerabilites?${scopeQs}`],
-    [s.vulns?.by_response.immediate ?? 0, "Vulnérabilités à traiter en Immédiat", "Exploitées ou très probablement exploitées, en prod : 7 jours", `/vulnerabilites?${scopeQs}`],
+    [s.vulns?.by_response.immediate ?? 0, "Vulnérabilités à traiter en Immédiat", `Exploitées ou très probablement exploitées, en prod : à corriger en ${s.vulns?.sla_hours.immediate ? span(s.vulns.sla_hours.immediate) : "7 j"}`, `/vulnerabilites?${scopeQs}`],
     [dt?.no_sbom?.length ?? 0, "Déployées sans SBOM", "Briques qui tournent sans SBOM dans Dependency-Track : leur zéro CVE ne prouve rien", "/vulnerabilites?vue=versions"],
     [dt?.by_tag?.length ?? 0, "Déployées par tag", "Briques déployées par tag et non par digest : l'image peut changer sans que le SBOM suive", "/vulnerabilites?vue=versions"],
     [dt?.expired_exceptions ?? 0, "Exceptions expirées", "Risques acceptés dont l'échéance est passée : à revoir avec le référent et le RSSI", `/vulnerabilites?vue=exceptions&${scopeQs}`],
@@ -318,7 +321,7 @@ export function Gaps({ gaps }: { gaps: Summary["gaps"] }) {
   return (
     <section className="card gaps" aria-labelledby="gaps-title">
       <h2 id="gaps-title">Pratiques absentes <span className="muted small">{gaps.length}</span></h2>
-      <p className="card-sub">Toutes les pratiques qui manquent dans ce périmètre, les plus répandues d'abord : part des projets mesurés où la pratique est absente ou seulement partielle, jusqu'à leur niveau cible</p>
+      <p className="card-sub">Les pratiques qui manquent dans ce périmètre, les plus répandues d'abord. Pour chacune : combien de projets mesurés ne l'ont pas (absente ou seulement partielle, jusqu'à leur niveau cible). Plus la barre rouge est longue, plus la pratique manque.</p>
       {gaps.length === 0 ? <p className="muted">Aucune pratique manquante.</p> : (
         <>
           <div className="fam-filter" role="group" aria-label="Famille DSOMM">
@@ -338,10 +341,13 @@ export function Gaps({ gaps }: { gaps: Summary["gaps"] }) {
                   <span className="gap-body">
                     <span className="gap-name" title={g.activity}>{practice(g.activity)}</span>
                     <span className="gap-meta"><span className="gap-level" title={`Niveau DSOMM ${g.level}`}>N{g.level}</span>{dimension(g.dimension)}</span>
-                    <span className="gap-bar" role="img" aria-label={`${pct} % des projets mesurés`}><span style={{ width: `${pct}%` }} /></span>
-                    <span className="muted small">{g.missing} projet{g.missing > 1 ? "s" : ""} sur {g.measured}</span>
+                    <span className="gap-bar" role="img" aria-label={`Manque dans ${pct} % des projets mesurés`}><span style={{ width: `${pct}%` }} /></span>
+                    <span className="muted small">Manque dans {pct} % des projets</span>
                   </span>
-                  <span className="gap-pct">{pct}<small> %</small></span>
+                  <span className="gap-pct">
+                    <span>{g.missing}<small> / {g.measured}</small></span>
+                    <span className="gap-cap">projet{g.measured > 1 ? "s" : ""} sans</span>
+                  </span>
                 </li>
               );
             })}

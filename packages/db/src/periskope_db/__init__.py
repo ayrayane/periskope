@@ -31,6 +31,8 @@ class Viewer:
     # (instance, path) of namespaces or projects where this viewer may launch runs and override scope:
     # where GitLab makes them Maintainer or Owner, plus rights granted by hand.
     maintains: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    # Instances whose GitLab memberships are not read yet: until they are, the scope above is incomplete.
+    pending: frozenset[str] = field(default_factory=frozenset)
 
     def where(self, alias: str = "p", start: int = 1) -> tuple[str, list]:
         """SQL condition on a projects row restricting it to this viewer, and its parameters ($start…)."""

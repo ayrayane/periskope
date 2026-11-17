@@ -60,8 +60,8 @@ oidc:
   # Example for an LDAP-backed workspace: { manager: auditor, user: viewer }
   roleMap: {}
 
-# Dependency-Track, read only (hourly): the projects of a GitLab path and the delivered versions (collection projects).
-# Each brick is named in DT by its GitLab path (cms/brique-a), or by a last path segment unique in `instance`.
+# Dependency-Track, read only (hourly): the projects of a GitLab path and the delivered versions (projects tagged version-livree).
+# Each brick is named in DT by its full GitLab path (cms/brique-a), versioned by its tag.
 # With DT, dependency and image vulnerabilities come from DT alone; GitLab keeps SAST, secrets and DAST.
 dependencyTrack:
   url: ""                          # e.g. https://dtrack.internal (the API is under /api)
