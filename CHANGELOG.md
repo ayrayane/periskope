@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Delivered versions, contract only (no code change): for each brick chosen, the GitOps job merges the code SBOM from DT with the SBOM of the brick's OCI image in Harbor, and uploads the result back into the brick's DT project before building the delivered version. Periskope then sees the image's CVEs too, read once with the brick's VEX. Checked on DT 5.2.1 with a CycloneDX image SBOM; reading it from Harbor is not checked (no Harbor on the lab).
+- Delivered versions, contract only (no code change): for each brick chosen, the GitOps job merges the code SBOM from DT with the CycloneDX SBOM Trivy generates for the brick's OCI image in Harbor, and uploads the result back into the brick's DT project before building the delivered version. Periskope then sees the image's CVEs too, read once with the brick's VEX. Checked on DT 5.2.1 with an SBOM from Trivy 0.58.1 (CycloneDX 1.6); pulling from Harbor itself is not checked (no Harbor on the lab).
 
 ## 1.7.0 — 2026-11-17
 
