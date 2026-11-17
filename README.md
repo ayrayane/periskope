@@ -116,7 +116,11 @@ VIEW_VULNERABILITY and SYSTEM_CONFIGURATION_READ, the last one to read when the 
 - **Delivered versions**: a DT project tagged `version-livree`, named after the CMS, its version the delivery's. The GitOps
   template builds it: it exports the SBOM of each brick version chosen (neither the latest nor the same number), merges them so
   that each brick is a component named and versioned as its own DT project, uploads the result with the tag, then uploads each
-  brick's VEX. Calls, checked on DT 5.2.1: `GET /api/v1/bom/cyclonedx/project/{uuid}?format=json&variant=inventory` (its
+  brick's VEX. Before that, for each brick chosen, the job merges the code SBOM exported from DT with the SBOM of the brick's OCI
+  image kept by Harbor (at the deployed digest; an SPDX one converted with `cyclonedx convert` first), under the brick's name and
+  version (`cyclonedx merge --name <GitLab path> --version <tag>`), and uploads the result back into the brick's own DT project:
+  its findings then cover code and image, read once by Periskope, and its VEX decisions stay. Checked on DT 5.2.1 with a CycloneDX
+  image SBOM; reading it from Harbor was not (no Harbor on the lab). Calls, checked on DT 5.2.1: `GET /api/v1/bom/cyclonedx/project/{uuid}?format=json&variant=inventory` (its
   `metadata.component` is the DT project's name and version), `cyclonedx merge --hierarchical --name <CMS> --version <version>`
   (cyclonedx-cli 0.27.2: each brick stays a top-level component with its dependencies under it), `PUT /api/v1/bom` with
   `projectName`, `projectVersion`, `autoCreate: true` and `projectTags: [{"name": "version-livree"}]`, then `PUT /api/v1/vex` per

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Delivered versions, contract only (no code change): for each brick chosen, the GitOps job merges the code SBOM from DT with the SBOM of the brick's OCI image in Harbor, and uploads the result back into the brick's DT project before building the delivered version. Periskope then sees the image's CVEs too, read once with the brick's VEX. Checked on DT 5.2.1 with a CycloneDX image SBOM; reading it from Harbor is not checked (no Harbor on the lab).
+
 ## 1.7.0 — 2026-11-17
 
 - Dependency-Track: a delivered version is now a DT project tagged `version-livree`, built by the GitOps template from the chosen brick versions (each brick a component named and versioned as its own DT project), so it reads as a whole in DT and a brick version can be in several delivered versions, of one CMS or several. Collection projects could not: a DT project has one parent. Periskope finds the bricks among the components, reads their findings and analyses once on their own project, and keeps which delivered versions hold which brick (migration 0012, `dt_members`). The GitOps template has to change accordingly (README). A brick's VEX must list the components it concerns: DT 5.2.1 accepts a VEX that only points at the SBOM's references and ignores it. Checked end to end on the test DT 5.2.1 (export, cyclonedx-cli 0.27.2 hierarchical merge, tag, VEX, Periskope's sync with its read-only key).
